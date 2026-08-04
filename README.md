@@ -8,14 +8,16 @@ Built as a personal project to solve my own job search and to learn Java/softwar
 
 Job hunting means the same repetitive loop over and over: search several job boards for the same handful of role titles, skim postings to see if they're worth a look, hand-tailor a resume for the ones that are, then fill out the same eligibility/demographic questions on a slightly different form each time. This app automates the tedious, mechanical parts of that loop (searching, scoring, tailoring, form-filling) while keeping a human in the loop for every judgment call — nothing gets submitted without me reading it first.
 
-## Current status: Phase 3 — Scoring engine
+## Current status: Phase 4 — GUI list view
 
-Every stored posting now gets a 0-100 fit score with a full, human-readable breakdown: skill/keyword match against my actual resume, salary fit against my target range, recency, and location fit — each shown with its point contribution and the reasoning behind it, not just a final number. No GUI yet; it's a console app for now.
+The console is gone — the app now opens as a JavaFX window: a ranked, scrollable table of every scored posting with a status badge and a Dismiss button per row, and a Refresh button that fetches new postings from Adzuna in the background without freezing the UI.
+
+![Job Hunt Copilot list view](docs/phase4-list-view.png)
 
 ## Tech stack
 
 - **Language:** Java 17
-- **GUI:** JavaFX (Phase 4+)
+- **GUI:** JavaFX 21 (`org.openjfx:javafx-controls`/`-graphics`/`-base`)
 - **Local storage:** SQLite via JDBC (`org.xerial:sqlite-jdbc`)
 - **Config parsing:** Gson (reads `config/roles.json` and `config/blocklist.json`)
 - **HTTP:** `java.net.http.HttpClient` (built into the JDK, no extra dependency)
@@ -43,7 +45,11 @@ Every posting gets a 0-100 score, computed as four weighted factors (weights liv
 
 The keyword matcher doesn't use a hand-maintained skills list — it strips `base_resume.tex` down to plain text (stripping LaTeX commands, keeping visible content) and tokenizes the whole thing, so the resume file stays the single source of truth. Nothing is a hard filter here: a posting below my salary floor or outside my preferred metros still gets scored and shown, just lower — dismissing is a manual decision (Phase 4+), not something the scorer does for me.
 
-Every score comes with a breakdown, not just the number — see `ScoreFactor`/`ScoreBreakdown` in `src/main/java/com/jobhuntcopilot/score/`, printed in full for the top 5 postings each run.
+Every score comes with a breakdown, not just the number — see `ScoreFactor`/`ScoreBreakdown` in `src/main/java/com/jobhuntcopilot/score/`. The list view (below) shows the score itself; the full per-factor breakdown is coming to the detail view in Phase 5.
+
+## List view
+
+The list is a ranked, scrollable table — score, title, company, salary, days since posted, location, and a status badge — with a **Dismiss** button per row that hides a posting from the default view for good (it's still in the database, just filtered out). **Refresh** re-runs the Adzuna fetch on a background thread so the window stays responsive while it's making network calls, then rescores and reloads the table. Company-blocklist filtering happens twice: once at fetch time (so a blocklisted company is never even stored) and again when the list loads (so adding a company to the blocklist retroactively hides anything already stored from them).
 
 ## Project layout
 
@@ -54,17 +60,21 @@ job-hunt-copilot/
 │   └── blocklist.json               # Companies to filter out before scoring
 ├── resources/
 │   └── base_resume.tex              # My base LaTeX resume — source of truth for all tailored versions
+├── docs/
+│   └── phase4-list-view.png          # Screenshot used in this README
 ├── src/
 │   ├── main/
 │   │   ├── java/com/jobhuntcopilot/
-│   │   │   ├── Main.java            # Entry point
+│   │   │   ├── Main.java            # JavaFX entry point (Application)
 │   │   │   ├── config/              # Config records, ConfigLoader (Gson), EnvLoader (.env parsing)
 │   │   │   ├── model/               # Job, JobStatus
 │   │   │   ├── db/                  # Database (schema init), JobRepository, ApiCallRepository
 │   │   │   ├── fetch/               # AdzunaClient, JobFetchService, FetchSummary
 │   │   │   ├── text/                # Tokenizer — shared keyword tokenization
 │   │   │   ├── resume/              # LatexTextExtractor, ResumeKeywordExtractor
-│   │   │   └── score/                # KeywordMatcher, *Scorer classes, ScoringEngine, ScoreBreakdown
+│   │   │   ├── score/                # KeywordMatcher, *Scorer classes, ScoringEngine, ScoreBreakdown
+│   │   │   ├── pipeline/            # JobPipeline — non-UI fetch/score/dismiss orchestration
+│   │   │   └── gui/                 # JobListView — the JavaFX table
 │   │   └── resources/
 │   │       └── schema.sql           # SQLite DDL: jobs table, api_calls table
 │   └── test/java/com/jobhuntcopilot/   # Mirrors main/ — one test class per component above
@@ -84,10 +94,10 @@ Requires Java 17+ and Maven.
 
 ```bash
 mvn clean test         # build + run tests (no network calls, no quota used)
-mvn compile exec:java  # run the app — fetches real postings from Adzuna
+mvn compile exec:java  # opens the app window
 ```
 
-Running the app fetches postings for every search term in `config/roles.json`, filters out anything blocklisted or older than 14 days, dedupes against what's already stored, and prints a per-term summary plus quota usage. Re-running within 6 hours of the last fetch for a given term skips it instead of re-querying.
+The window opens showing whatever's already in `data/jobhunt.db` (instant, no network call). Click **Refresh** to fetch postings for every search term in `config/roles.json` — it filters out anything blocklisted or older than 14 days, dedupes against what's already stored, then rescores and reloads the table. Refreshing within 6 hours of the last fetch for a given term skips it instead of re-querying.
 
 ### Editing the config
 
@@ -99,13 +109,23 @@ Running the app fetches postings for every search term in `config/roles.json`, f
 - [x] **Phase 1** — Config + data layer: roles/scoring config, SQLite schema, `Job` model
 - [x] **Phase 2** — Job fetching: Adzuna client, 14-day filter, dedupe, quota logging
 - [x] **Phase 3** — Scoring engine: keyword match, salary, recency, location fit
-- [ ] **Phase 4** — GUI list view
+- [x] **Phase 4** — GUI list view
 - [ ] **Phase 5** — GUI detail view
 - [ ] **Phase 6** — Resume tailoring (Claude API + LaTeX→PDF)
 - [ ] **Phase 7** — Cover letter generation
 - [ ] **Phase 8** — Semi-automated apply flow (Greenhouse/Lever first)
 - [ ] **Phase 9** — Application history + CSV export
 - [ ] **Phase 10** — Polish: error handling, more tests, screenshots, demo GIF
+
+## What I learned — Phase 4
+
+Getting JavaFX to even resolve as a Maven dependency was its own small saga. JavaFX's published artifacts need a platform classifier (the native windowing library is different per OS), and the standard trick for that is the `os-maven-plugin`, which sets `${os.detected.classifier}` automatically. Except JavaFX doesn't use that plugin's classifier scheme — `os-maven-plugin` reports `osx-aarch_64` on my machine, but JavaFX's actual published artifacts use `mac-aarch64`. Nothing lines up, so the build failed with "could not find artifact" even though the dependency coordinates were otherwise correct. I replaced it with Maven's built-in `<os>` profile activation instead — a profile per OS/arch combination that sets a `javafx.platform` property to JavaFX's *own* naming, not a generic one. One fewer plugin, and it actually matches what's published.
+
+The more useful lesson was about verifying a GUI at all from an automated terminal. I don't have real display/accessibility access from this environment — `screencapture` failed the first time with "could not create image from display," and AppleScript couldn't click buttons ("osascript is not allowed assistive access"). Rather than assume the code was correct because it compiled, I found what I *could* verify: `System Events` can still list window names and read window position/size without special permissions, which was enough to confirm a real window opened, and `screencapture -R` with those exact coordinates got me an actual screenshot of the running app. I used that to visually confirm the table, columns, and formatting all render correctly against real fetched data — but I still couldn't click Refresh or Dismiss myself, so those specific interactions are unverified beyond the fact that `JobPipeline` (the code they call into) has its own passing tests. Worth being honest about: automated verification has a real ceiling here, and pretending otherwise would just be a more confident-sounding guess.
+
+That same debugging session also caught a real mistake: I tried to verify the pipeline via `mvn exec:java -Dexec.mainClass=...` to override the app's entry point, and the override silently did nothing — Maven kept launching the full GUI every time because `pom.xml` had `mainClass` hardcoded rather than templated as `${exec.mainClass}`, so the command-line property never had anything to bind to. It took actually checking whether a "Job Hunt Copilot" window existed (it did, every time) to realize the override wasn't taking effect at all — I'd been quietly relaunching the GUI over and over, not running my verification script. The fix was simpler than debugging around it: temporarily point `pom.xml` straight at the scratch class, run it, put it back.
+
+Architecturally, the main decision was keeping `JobPipeline` (fetch, score, dismiss) completely separate from `JobListView` (the actual JavaFX table). JavaFX code is awkward to unit test — it wants a running toolkit — so anything with real logic needed to live somewhere test-independent of it. `JobPipelineTest` covers dismiss filtering, blocklist filtering, sorting, and score persistence with zero JavaFX on the classpath. The one thing that does live in the view layer is backgrounding: `Refresh` runs the actual network fetch inside a JavaFX `Task` on its own thread, because blocking the Application Thread with an HTTP call would freeze the whole window until it returned.
 
 ## What I learned — Phase 3
 
