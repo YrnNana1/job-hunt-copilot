@@ -8,9 +8,9 @@ Built as a personal project to solve my own job search and to learn Java/softwar
 
 Job hunting means the same repetitive loop over and over: search several job boards for the same handful of role titles, skim postings to see if they're worth a look, hand-tailor a resume for the ones that are, then fill out the same eligibility/demographic questions on a slightly different form each time. This app automates the tedious, mechanical parts of that loop (searching, scoring, tailoring, form-filling) while keeping a human in the loop for every judgment call — nothing gets submitted without me reading it first.
 
-## Current status: Phase 2 — Job fetching
+## Current status: Phase 3 — Scoring engine
 
-The app now pulls real postings from the Adzuna API for every configured search term, filters them to the last 14 days and against the company blocklist, and stores the results — with quota usage logged so I can see how much of Adzuna's free tier I've used. No GUI yet; it's a console app for now.
+Every stored posting now gets a 0-100 fit score with a full, human-readable breakdown: skill/keyword match against my actual resume, salary fit against my target range, recency, and location fit — each shown with its point contribution and the reasoning behind it, not just a final number. No GUI yet; it's a console app for now.
 
 ## Tech stack
 
@@ -30,6 +30,21 @@ The app now pulls real postings from the Adzuna API for every configured search 
 
 Adzuna's free tier is ~1,000 calls/month (~33/day), so the fetcher is careful with it: one page per search term (~6 calls per full run), and a 6-hour cooldown that skips re-fetching a term if it was already queried recently. Every call is logged to the `api_calls` table so quota usage is visible over time.
 
+## Scoring
+
+Every posting gets a 0-100 score, computed as four weighted factors (weights live in `config/roles.json` and are configurable):
+
+| Factor | Weight | What it measures |
+|---|---|---|
+| Skill/keyword match | 35% | Resume keyword overlap (real words extracted from `base_resume.tex`) + job title vs. configured search terms |
+| Salary fit | 30% | Posting's salary vs. my minimum acceptable ($80k) and target range ($85k-90k+) |
+| Recency | 20% | Linear decay from 1.0 (posted today) to 0.0 (at the 14-day cutoff) |
+| Location fit | 15% | Remote, or a preferred metro (VA/MD/NC/TX/DC/Atlanta/Seattle/FL) scores highest; anywhere else still scores reasonably, since I'm open to relocating |
+
+The keyword matcher doesn't use a hand-maintained skills list — it strips `base_resume.tex` down to plain text (stripping LaTeX commands, keeping visible content) and tokenizes the whole thing, so the resume file stays the single source of truth. Nothing is a hard filter here: a posting below my salary floor or outside my preferred metros still gets scored and shown, just lower — dismissing is a manual decision (Phase 4+), not something the scorer does for me.
+
+Every score comes with a breakdown, not just the number — see `ScoreFactor`/`ScoreBreakdown` in `src/main/java/com/jobhuntcopilot/score/`, printed in full for the top 5 postings each run.
+
 ## Project layout
 
 ```
@@ -46,13 +61,13 @@ job-hunt-copilot/
 │   │   │   ├── config/              # Config records, ConfigLoader (Gson), EnvLoader (.env parsing)
 │   │   │   ├── model/               # Job, JobStatus
 │   │   │   ├── db/                  # Database (schema init), JobRepository, ApiCallRepository
-│   │   │   └── fetch/               # AdzunaClient, JobFetchService, FetchSummary
+│   │   │   ├── fetch/               # AdzunaClient, JobFetchService, FetchSummary
+│   │   │   ├── text/                # Tokenizer — shared keyword tokenization
+│   │   │   ├── resume/              # LatexTextExtractor, ResumeKeywordExtractor
+│   │   │   └── score/                # KeywordMatcher, *Scorer classes, ScoringEngine, ScoreBreakdown
 │   │   └── resources/
 │   │       └── schema.sql           # SQLite DDL: jobs table, api_calls table
-│   └── test/java/com/jobhuntcopilot/
-│       ├── config/ConfigLoaderTest.java, EnvLoaderTest.java
-│       ├── db/JobRepositoryTest.java, ApiCallRepositoryTest.java
-│       └── fetch/JobFetchServiceTest.java
+│   └── test/java/com/jobhuntcopilot/   # Mirrors main/ — one test class per component above
 ├── .env.example                     # Template for API keys — copy to .env and fill in (gitignored)
 ├── .gitignore
 └── pom.xml
@@ -76,14 +91,14 @@ Running the app fetches postings for every search term in `config/roles.json`, f
 
 ### Editing the config
 
-`config/roles.json` and `config/blocklist.json` are meant to be hand-edited as my search evolves — no code changes needed to add a role, tweak a scoring weight, or block a company. Two fields are placeholders until I have real numbers to put in: `location.acceptableMetros` (empty list right now) and `scoring.salaryTarget` (`min`/`max` are `null`) — both get filled in when we reach the scoring phase (Phase 3).
+`config/roles.json` and `config/blocklist.json` are meant to be hand-edited as my search evolves — no code changes needed to add a role, tweak a scoring weight, add a preferred metro, or block a company.
 
 ## Roadmap
 
 - [x] **Phase 0** — Repo setup: Maven skeleton, `.gitignore`, README, GitHub repo
 - [x] **Phase 1** — Config + data layer: roles/scoring config, SQLite schema, `Job` model
 - [x] **Phase 2** — Job fetching: Adzuna client, 14-day filter, dedupe, quota logging
-- [ ] **Phase 3** — Scoring engine: keyword match, salary, recency, location fit
+- [x] **Phase 3** — Scoring engine: keyword match, salary, recency, location fit
 - [ ] **Phase 4** — GUI list view
 - [ ] **Phase 5** — GUI detail view
 - [ ] **Phase 6** — Resume tailoring (Claude API + LaTeX→PDF)
@@ -91,6 +106,12 @@ Running the app fetches postings for every search term in `config/roles.json`, f
 - [ ] **Phase 8** — Semi-automated apply flow (Greenhouse/Lever first)
 - [ ] **Phase 9** — Application history + CSV export
 - [ ] **Phase 10** — Polish: error handling, more tests, screenshots, demo GIF
+
+## What I learned — Phase 3
+
+The keyword matching only became trustworthy after I actually looked at its output. My first version tokenized the whole resume and job postings and counted overlapping words — technically correct, but the very first live run's top match showed matched keywords like "including," "detailed," "during," and "experience." Those are real words, but they show up in almost every resume and every job posting regardless of actual fit, so they were diluting the score instead of explaining it. The fix wasn't a smarter algorithm, it was a better stopword list — I added a second tier of "resume/job-posting boilerplate" words (experience, skills, technical, required, years, and a few others) on top of ordinary English stopwords like "the" and "and." After that, the same top posting's matches became "ai, machine, learning, engineer, infrastructure, lead" — actually meaningful. This was a good reminder that "transparent scoring" isn't just about exposing a formula; the breakdown has to survive being read, or it doesn't actually build trust.
+
+The other thing worth noting: I caught a real bug through reasoning before it shipped, not through a failing test. My first pass at location matching used `location.contains("VA")` — a plain substring check. "Las Vegas, NV" contains the substring "va" (inside "Vegas"), which would have wrongly scored a Nevada posting as matching my Virginia preference. Switching to token-based matching (tokenize the location string, tokenize the metro name, require an exact token match) fixed it, and `LocationScorerTest.abbreviationDoesNotFalsePositiveInsideAnUnrelatedWord` locks in the fix so it can't silently regress.
 
 ## What I learned — Phase 2
 

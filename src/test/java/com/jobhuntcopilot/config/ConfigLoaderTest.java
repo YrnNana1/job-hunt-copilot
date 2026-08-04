@@ -24,9 +24,17 @@ class ConfigLoaderTest {
         RolesConfig config = ConfigLoader.loadRolesConfig();
         ScoringWeights weights = config.scoring().weights();
 
-        double total = weights.keywordMatch() + weights.titleMatch() + weights.salary()
-                + weights.recency() + weights.locationFit();
+        double total = weights.keywordMatch() + weights.salary() + weights.recency() + weights.locationFit();
         assertEquals(1.0, total, 0.0001);
+    }
+
+    @Test
+    void loadsSalaryTargetAndPreferredMetros() {
+        RolesConfig config = ConfigLoader.loadRolesConfig();
+
+        assertEquals(80000, config.scoring().salaryTarget().minimumAcceptable());
+        assertEquals(85000, config.scoring().salaryTarget().targetMin());
+        assertTrue(config.location().acceptableMetros().contains("Texas"));
     }
 
     @Test

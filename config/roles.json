@@ -8,7 +8,7 @@
     { "term": "Associate Consultant", "reason": "Big 4 / consulting firms, tech-focused" }
   ],
   "location": {
-    "acceptableMetros": [],
+    "acceptableMetros": ["Virginia", "VA", "Maryland", "MD", "North Carolina", "NC", "Texas", "TX", "DC", "Atlanta", "Seattle", "Florida", "FL"],
     "remoteOk": true
   },
   "recency": {
@@ -17,14 +17,14 @@
   "scoring": {
     "weights": {
       "keywordMatch": 0.35,
-      "titleMatch": 0.25,
-      "salary": 0.15,
-      "recency": 0.15,
-      "locationFit": 0.10
+      "salary": 0.30,
+      "recency": 0.20,
+      "locationFit": 0.15
     },
     "salaryTarget": {
-      "min": null,
-      "max": null,
+      "minimumAcceptable": 80000,
+      "targetMin": 85000,
+      "targetMax": 90000,
       "currency": "USD"
     }
   }

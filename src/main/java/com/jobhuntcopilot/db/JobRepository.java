@@ -79,6 +79,16 @@ public class JobRepository {
         }
     }
 
+    public void updateScore(long id, double score) throws SQLException {
+        String sql = "UPDATE jobs SET score = ?, updated_at = datetime('now') WHERE id = ?";
+        try (Connection connection = database.connect();
+                PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setDouble(1, score);
+            statement.setLong(2, id);
+            statement.executeUpdate();
+        }
+    }
+
     private Optional<Job> findBySourceAndExternalId(Connection connection, String source, String externalId)
             throws SQLException {
         String sql = "SELECT * FROM jobs WHERE source = ? AND external_id = ?";
