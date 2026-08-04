@@ -1,0 +1,19 @@
+# Maven build output
+target/
+
+# Environment variables and secrets
+.env
+
+# Personal profile answers (work authorization, EEO, veteran/disability status) — never committed
+config/profile.json
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# OS
+.DS_Store
+
+# Logs
+*.log
