@@ -1,6 +1,9 @@
 # Maven build output
 target/
 
+# Local SQLite database (runtime state, not source)
+data/
+
 # Environment variables and secrets
 .env
 

@@ -1,0 +1,31 @@
+{
+  "searchTerms": [
+    { "term": "Technical Consultant", "reason": "Keller experience" },
+    { "term": "Implementation Consultant", "reason": "Keller experience" },
+    { "term": "Solutions Engineer", "reason": "Technical + client-facing" },
+    { "term": "AI Engineer", "reason": "Claude usage, entry-level" },
+    { "term": "Cybersecurity Analyst GRC", "reason": "Security+" },
+    { "term": "Associate Consultant", "reason": "Big 4 / consulting firms, tech-focused" }
+  ],
+  "location": {
+    "acceptableMetros": [],
+    "remoteOk": true
+  },
+  "recency": {
+    "maxDaysOld": 14
+  },
+  "scoring": {
+    "weights": {
+      "keywordMatch": 0.35,
+      "titleMatch": 0.25,
+      "salary": 0.15,
+      "recency": 0.15,
+      "locationFit": 0.10
+    },
+    "salaryTarget": {
+      "min": null,
+      "max": null,
+      "currency": "USD"
+    }
+  }
+}
