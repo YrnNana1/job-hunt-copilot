@@ -8,9 +8,9 @@ Built as a personal project to solve my own job search and to learn Java/softwar
 
 Job hunting means the same repetitive loop over and over: search several job boards for the same handful of role titles, skim postings to see if they're worth a look, hand-tailor a resume for the ones that are, then fill out the same eligibility/demographic questions on a slightly different form each time. This app automates the tedious, mechanical parts of that loop (searching, scoring, tailoring, form-filling) while keeping a human in the loop for every judgment call — nothing gets submitted without me reading it first.
 
-## Current status: Phase 1 — Config + data layer
+## Current status: Phase 2 — Job fetching
 
-Postings can now be stored and deduped in a local SQLite database, and the search/scoring/blocklist settings live in editable config files instead of being hardcoded. No job fetching yet — that's Phase 2.
+The app now pulls real postings from the Adzuna API for every configured search term, filters them to the last 14 days and against the company blocklist, and stores the results — with quota usage logged so I can see how much of Adzuna's free tier I've used. No GUI yet; it's a console app for now.
 
 ## Tech stack
 
@@ -26,7 +26,9 @@ Postings can now be stored and deduped in a local SQLite database, and the searc
 
 ## Job data sources
 
-Adzuna API, USAJobs API, and the Greenhouse/Lever public job board APIs. Deliberately **not** scraping LinkedIn or Indeed — both prohibit automated scraping and bot-driven applications in their Terms of Service.
+**Adzuna API** is live (Phase 2). USAJobs and the Greenhouse/Lever public job board APIs are planned for later phases. Deliberately **not** scraping LinkedIn or Indeed — both prohibit automated scraping and bot-driven applications in their Terms of Service.
+
+Adzuna's free tier is ~1,000 calls/month (~33/day), so the fetcher is careful with it: one page per search term (~6 calls per full run), and a 6-hour cooldown that skips re-fetching a term if it was already queried recently. Every call is logged to the `api_calls` table so quota usage is visible over time.
 
 ## Project layout
 
@@ -41,15 +43,16 @@ job-hunt-copilot/
 │   ├── main/
 │   │   ├── java/com/jobhuntcopilot/
 │   │   │   ├── Main.java            # Entry point
-│   │   │   ├── config/              # Config file records + ConfigLoader (Gson)
+│   │   │   ├── config/              # Config records, ConfigLoader (Gson), EnvLoader (.env parsing)
 │   │   │   ├── model/               # Job, JobStatus
-│   │   │   └── db/                  # Database (schema init), JobRepository (dedupe-aware CRUD)
+│   │   │   ├── db/                  # Database (schema init), JobRepository, ApiCallRepository
+│   │   │   └── fetch/               # AdzunaClient, JobFetchService, FetchSummary
 │   │   └── resources/
-│   │       └── schema.sql           # SQLite DDL for the jobs table
+│   │       └── schema.sql           # SQLite DDL: jobs table, api_calls table
 │   └── test/java/com/jobhuntcopilot/
-│       ├── MainTest.java
-│       ├── config/ConfigLoaderTest.java
-│       └── db/JobRepositoryTest.java
+│       ├── config/ConfigLoaderTest.java, EnvLoaderTest.java
+│       ├── db/JobRepositoryTest.java, ApiCallRepositoryTest.java
+│       └── fetch/JobFetchServiceTest.java
 ├── .env.example                     # Template for API keys — copy to .env and fill in (gitignored)
 ├── .gitignore
 └── pom.xml
@@ -61,12 +64,15 @@ job-hunt-copilot/
 
 Requires Java 17+ and Maven.
 
+1. Copy `.env.example` to `.env` and fill in `ADZUNA_APP_ID` / `ADZUNA_APP_KEY` (free from [developer.adzuna.com](https://developer.adzuna.com/)).
+2. Run it:
+
 ```bash
-mvn clean test         # build + run tests
-mvn compile exec:java  # run the app
+mvn clean test         # build + run tests (no network calls, no quota used)
+mvn compile exec:java  # run the app — fetches real postings from Adzuna
 ```
 
-Running the app right now loads `config/roles.json` and `config/blocklist.json`, prints a summary, and creates/verifies the SQLite schema at `data/jobhunt.db`. There's no `.env` needed yet — it becomes required starting Phase 2, once the app makes real API calls.
+Running the app fetches postings for every search term in `config/roles.json`, filters out anything blocklisted or older than 14 days, dedupes against what's already stored, and prints a per-term summary plus quota usage. Re-running within 6 hours of the last fetch for a given term skips it instead of re-querying.
 
 ### Editing the config
 
@@ -76,7 +82,7 @@ Running the app right now loads `config/roles.json` and `config/blocklist.json`,
 
 - [x] **Phase 0** — Repo setup: Maven skeleton, `.gitignore`, README, GitHub repo
 - [x] **Phase 1** — Config + data layer: roles/scoring config, SQLite schema, `Job` model
-- [ ] **Phase 2** — Job fetching: Adzuna client, 14-day filter, dedupe, quota logging
+- [x] **Phase 2** — Job fetching: Adzuna client, 14-day filter, dedupe, quota logging
 - [ ] **Phase 3** — Scoring engine: keyword match, salary, recency, location fit
 - [ ] **Phase 4** — GUI list view
 - [ ] **Phase 5** — GUI detail view
@@ -85,6 +91,12 @@ Running the app right now loads `config/roles.json` and `config/blocklist.json`,
 - [ ] **Phase 8** — Semi-automated apply flow (Greenhouse/Lever first)
 - [ ] **Phase 9** — Application history + CSV export
 - [ ] **Phase 10** — Polish: error handling, more tests, screenshots, demo GIF
+
+## What I learned — Phase 2
+
+The Phase 1 dedupe logic proved itself sooner than expected — not across sources, but *within a single run*. Adzuna's search does fuzzy matching, so a "Solutions Engineer" query and a "Technical Consultant" query sometimes return the very same listing (a hybrid role matches both). On the first live run, the "Solutions Engineer" term fetched 20 results but only 4 were actually new — 16 were already in the database from an earlier term in the same run. The title+company+posted-date fallback caught every one of them without me writing any run-specific logic for it, which was a nice confirmation that dedupe belongs at the repository layer, not scattered through the fetcher.
+
+The other real decision was testability: `JobFetchService` depends on an `AdzunaSearchClient` interface, not the concrete `AdzunaClient`, so `JobFetchServiceTest` runs against a fake that returns canned responses instead of hitting the live API. That matters for a free-tier API — without it, every `mvn test` run would burn real Adzuna quota and eventually just start failing in CI with no internet access. The fake's responses are built with the same Gson classes the real client uses (`AdzunaSearchResponse.class`), so the fixtures look like real API payloads instead of hand-rolled test doubles that could drift from what Adzuna actually returns.
 
 ## What I learned — Phase 1
 

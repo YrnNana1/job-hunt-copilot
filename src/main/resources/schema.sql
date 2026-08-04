@@ -34,3 +34,16 @@ CREATE INDEX IF NOT EXISTS idx_jobs_title_company_posted
 
 CREATE INDEX IF NOT EXISTS idx_jobs_status
     ON jobs (status);
+
+-- One row per outbound API call (Adzuna, USAJobs, ...), so quota usage can be
+-- inspected later and so JobFetchService can skip re-fetching a search term
+-- that was just queried (see JobFetchService's cooldown check).
+CREATE TABLE IF NOT EXISTS api_calls (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    endpoint   TEXT NOT NULL,
+    params     TEXT NOT NULL,
+    called_at  TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_api_calls_params_called_at
+    ON api_calls (params, called_at);
