@@ -83,8 +83,10 @@ public class JobListView extends BorderPane {
             protected List<ScoredJob> call() throws SQLException {
                 List<FetchSummary> summaries = pipeline.fetchNewPostings();
                 int inserted = summaries.stream().mapToInt(FetchSummary::inserted).sum();
+                int ineligible = summaries.stream().mapToInt(FetchSummary::ineligible).sum();
                 int callsToday = pipeline.apiCallsInLast24Hours();
-                updateMessage(inserted + " new posting(s) fetched (" + callsToday + " Adzuna calls in the last 24h).");
+                updateMessage(inserted + " new posting(s) fetched, " + ineligible + " ineligible (filtered) ("
+                        + callsToday + " Adzuna calls in the last 24h).");
                 return pipeline.loadScoredJobs();
             }
         };

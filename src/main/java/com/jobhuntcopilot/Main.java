@@ -6,6 +6,7 @@ import com.jobhuntcopilot.config.EnvLoader;
 import com.jobhuntcopilot.config.RolesConfig;
 import com.jobhuntcopilot.db.ApiCallRepository;
 import com.jobhuntcopilot.db.Database;
+import com.jobhuntcopilot.db.EligibilityExclusionRepository;
 import com.jobhuntcopilot.db.JobRepository;
 import com.jobhuntcopilot.fetch.AdzunaClient;
 import com.jobhuntcopilot.fetch.JobFetchService;
@@ -55,15 +56,18 @@ public class Main extends Application {
 
         JobRepository jobRepository = new JobRepository(database);
         ApiCallRepository apiCallRepository = new ApiCallRepository(database);
+        EligibilityExclusionRepository eligibilityExclusionRepository = new EligibilityExclusionRepository(database);
 
         AdzunaClient adzunaClient = new AdzunaClient(
                 EnvLoader.require("ADZUNA_APP_ID"), EnvLoader.require("ADZUNA_APP_KEY"));
         JobFetchService fetchService = new JobFetchService(
-                adzunaClient, jobRepository, apiCallRepository, blocklist, roles.recency());
+                adzunaClient, jobRepository, apiCallRepository, eligibilityExclusionRepository, blocklist,
+                roles.recency(), roles.eligibility());
 
         Set<String> resumeKeywords = ResumeKeywordExtractor.extractKeywords(Path.of("resources", "base_resume.tex"));
         ScoringEngine scoringEngine = new ScoringEngine(resumeKeywords, roles);
 
-        return new JobPipeline(roles, blocklist, jobRepository, fetchService, apiCallRepository, scoringEngine);
+        return new JobPipeline(roles, blocklist, jobRepository, fetchService, apiCallRepository,
+                eligibilityExclusionRepository, scoringEngine);
     }
 }

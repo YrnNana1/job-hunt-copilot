@@ -1,10 +1,14 @@
 package com.jobhuntcopilot.fetch;
 
 import com.jobhuntcopilot.config.BlocklistConfig;
+import com.jobhuntcopilot.config.EligibilityConfig;
 import com.jobhuntcopilot.config.RecencyRule;
 import com.jobhuntcopilot.config.SearchTerm;
 import com.jobhuntcopilot.db.ApiCallRepository;
+import com.jobhuntcopilot.db.EligibilityExclusionRepository;
 import com.jobhuntcopilot.db.JobRepository;
+import com.jobhuntcopilot.eligibility.EligibilityFilter;
+import com.jobhuntcopilot.eligibility.EligibilityResult;
 import com.jobhuntcopilot.model.Job;
 
 import java.sql.SQLException;
@@ -35,20 +39,26 @@ public class JobFetchService {
     private final AdzunaSearchClient adzunaClient;
     private final JobRepository jobRepository;
     private final ApiCallRepository apiCallRepository;
+    private final EligibilityExclusionRepository eligibilityExclusionRepository;
     private final BlocklistConfig blocklist;
     private final RecencyRule recencyRule;
+    private final EligibilityFilter eligibilityFilter;
 
     public JobFetchService(
             AdzunaSearchClient adzunaClient,
             JobRepository jobRepository,
             ApiCallRepository apiCallRepository,
+            EligibilityExclusionRepository eligibilityExclusionRepository,
             BlocklistConfig blocklist,
-            RecencyRule recencyRule) {
+            RecencyRule recencyRule,
+            EligibilityConfig eligibilityConfig) {
         this.adzunaClient = adzunaClient;
         this.jobRepository = jobRepository;
         this.apiCallRepository = apiCallRepository;
+        this.eligibilityExclusionRepository = eligibilityExclusionRepository;
         this.blocklist = blocklist;
         this.recencyRule = recencyRule;
+        this.eligibilityFilter = new EligibilityFilter(eligibilityConfig);
     }
 
     public List<FetchSummary> fetchAll(List<SearchTerm> searchTerms) throws SQLException {
@@ -86,6 +96,7 @@ public class JobFetchService {
         int inserted = 0;
         int duplicates = 0;
         int blocklistedCount = 0;
+        int ineligibleCount = 0;
         int stale = 0;
         int invalid = 0;
 
@@ -104,6 +115,12 @@ public class JobFetchService {
                 blocklistedCount++;
                 continue;
             }
+            EligibilityResult eligibility = eligibilityFilter.evaluate(job);
+            if (!eligibility.eligible()) {
+                eligibilityExclusionRepository.log(job, eligibility);
+                ineligibleCount++;
+                continue;
+            }
             if (job.getPostedDate().isBefore(cutoff)) {
                 stale++;
                 continue;
@@ -117,7 +134,7 @@ public class JobFetchService {
             }
         }
 
-        return FetchSummary.fetched(term, fetched, inserted, duplicates, blocklistedCount, stale, invalid);
+        return FetchSummary.fetched(term, fetched, inserted, duplicates, blocklistedCount, ineligibleCount, stale, invalid);
     }
 
     private boolean isBlocklisted(String company) {

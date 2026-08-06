@@ -27,5 +27,12 @@
       "targetMax": 90000,
       "currency": "USD"
     }
+  },
+  "eligibility": {
+    "excludedTitleKeywords": [
+      "Senior", "Sr.", "Lead", "Principal", "Staff", "Manager", "Director",
+      "Head of", "VP", "Vice President", "Chief", "Executive"
+    ],
+    "maxYearsExperience": 2
   }
 }

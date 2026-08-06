@@ -4,10 +4,12 @@ import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.jobhuntcopilot.config.BlocklistConfig;
+import com.jobhuntcopilot.config.EligibilityConfig;
 import com.jobhuntcopilot.config.RecencyRule;
 import com.jobhuntcopilot.config.SearchTerm;
 import com.jobhuntcopilot.db.ApiCallRepository;
 import com.jobhuntcopilot.db.Database;
+import com.jobhuntcopilot.db.EligibilityExclusionRepository;
 import com.jobhuntcopilot.db.JobRepository;
 import com.jobhuntcopilot.model.Job;
 import org.junit.jupiter.api.BeforeEach;
@@ -34,9 +36,11 @@ class JobFetchServiceTest {
 
     private static final Gson GSON = new Gson();
     private static final RecencyRule FOURTEEN_DAYS = new RecencyRule(14);
+    private static final EligibilityConfig NO_ELIGIBILITY_RULES = new EligibilityConfig(List.of(), 99);
 
     private JobRepository jobRepository;
     private ApiCallRepository apiCallRepository;
+    private EligibilityExclusionRepository eligibilityExclusionRepository;
     private FakeAdzunaSearchClient fakeClient;
 
     @BeforeEach
@@ -45,6 +49,7 @@ class JobFetchServiceTest {
         database.initSchema();
         jobRepository = new JobRepository(database);
         apiCallRepository = new ApiCallRepository(database);
+        eligibilityExclusionRepository = new EligibilityExclusionRepository(database);
         fakeClient = new FakeAdzunaSearchClient();
     }
 
@@ -67,6 +72,27 @@ class JobFetchServiceTest {
         assertEquals(1, summary.blocklisted());
         assertEquals(1, summary.stale());
         assertEquals(1, jobRepository.findAll().size());
+    }
+
+    @Test
+    void excludesIneligiblePostingsAndLogsWhy() throws SQLException {
+        fakeClient.respondWith("Solutions Engineer", buildResponse(
+                jobJson("1", "Senior Solutions Engineer", "Acme Corp", "Remote", 1),
+                jobJson("2", "Solutions Engineer", "Acme Corp", "Remote", 1)));
+
+        EligibilityConfig eligibility = new EligibilityConfig(List.of("Senior"), 99);
+        JobFetchService service = newService(new BlocklistConfig(List.of()), eligibility);
+
+        List<FetchSummary> summaries = service.fetchAll(List.of(new SearchTerm("Solutions Engineer", "test")));
+
+        assertEquals(1, summaries.get(0).ineligible());
+        assertEquals(1, summaries.get(0).inserted());
+        assertEquals(1, jobRepository.findAll().size());
+        assertEquals("Solutions Engineer", jobRepository.findAll().get(0).getTitle());
+
+        var exclusions = eligibilityExclusionRepository.findAll();
+        assertEquals(1, exclusions.size());
+        assertEquals("SENIORITY", exclusions.get(0).reason());
     }
 
     @Test
@@ -117,7 +143,12 @@ class JobFetchServiceTest {
     }
 
     private JobFetchService newService(BlocklistConfig blocklist) {
-        return new JobFetchService(fakeClient, jobRepository, apiCallRepository, blocklist, FOURTEEN_DAYS);
+        return newService(blocklist, NO_ELIGIBILITY_RULES);
+    }
+
+    private JobFetchService newService(BlocklistConfig blocklist, EligibilityConfig eligibility) {
+        return new JobFetchService(fakeClient, jobRepository, apiCallRepository, eligibilityExclusionRepository,
+                blocklist, FOURTEEN_DAYS, eligibility);
     }
 
     private JsonObject jobJson(String id, String title, String company, String location, int daysAgo) {

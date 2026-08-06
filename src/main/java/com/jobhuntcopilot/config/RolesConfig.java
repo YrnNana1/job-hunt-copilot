@@ -7,5 +7,6 @@ public record RolesConfig(
         List<SearchTerm> searchTerms,
         LocationPreference location,
         RecencyRule recency,
-        ScoringConfig scoring) {
+        ScoringConfig scoring,
+        EligibilityConfig eligibility) {
 }

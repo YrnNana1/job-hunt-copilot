@@ -47,3 +47,23 @@ CREATE TABLE IF NOT EXISTS api_calls (
 
 CREATE INDEX IF NOT EXISTS idx_api_calls_params_called_at
     ON api_calls (params, called_at);
+
+-- One row per posting hard-excluded by EligibilityFilter (seniority title, years of
+-- experience, active clearance requirement) — durable and queryable, same style the apply
+-- flow's per-attempt log (Phase 8) is meant to follow, specifically so filtering decisions
+-- can be spot-checked for over-filtering rather than trusted blindly.
+--
+-- UNIQUE(source, external_id) makes logging idempotent: JobPipeline re-evaluates eligibility
+-- on every list load for whatever's already stored, and "INSERT OR IGNORE" (see
+-- EligibilityExclusionRepository) means that doesn't spam a new row every single load.
+CREATE TABLE IF NOT EXISTS eligibility_exclusions (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    source      TEXT NOT NULL,
+    external_id TEXT NOT NULL,
+    title       TEXT NOT NULL,
+    company     TEXT NOT NULL,
+    reason      TEXT NOT NULL CHECK (reason IN ('SENIORITY', 'EXPERIENCE', 'CLEARANCE')),
+    detail      TEXT NOT NULL,
+    excluded_at TEXT NOT NULL,
+    UNIQUE (source, external_id)
+);

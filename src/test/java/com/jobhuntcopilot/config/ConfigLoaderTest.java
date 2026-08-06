@@ -38,6 +38,16 @@ class ConfigLoaderTest {
     }
 
     @Test
+    void loadsEligibilityConfig() {
+        RolesConfig config = ConfigLoader.loadRolesConfig();
+        EligibilityConfig eligibility = config.eligibility();
+
+        assertEquals(2, eligibility.maxYearsExperience());
+        assertTrue(eligibility.excludedTitleKeywords().contains("Senior"));
+        assertTrue(eligibility.excludedTitleKeywords().contains("Lead"));
+    }
+
+    @Test
     void loadsBlocklistConfig() {
         BlocklistConfig config = ConfigLoader.loadBlocklistConfig();
 

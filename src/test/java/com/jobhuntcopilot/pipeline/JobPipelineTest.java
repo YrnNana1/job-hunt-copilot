@@ -1,6 +1,7 @@
 package com.jobhuntcopilot.pipeline;
 
 import com.jobhuntcopilot.config.BlocklistConfig;
+import com.jobhuntcopilot.config.EligibilityConfig;
 import com.jobhuntcopilot.config.LocationPreference;
 import com.jobhuntcopilot.config.RecencyRule;
 import com.jobhuntcopilot.config.RolesConfig;
@@ -9,9 +10,9 @@ import com.jobhuntcopilot.config.ScoringConfig;
 import com.jobhuntcopilot.config.ScoringWeights;
 import com.jobhuntcopilot.db.ApiCallRepository;
 import com.jobhuntcopilot.db.Database;
+import com.jobhuntcopilot.db.EligibilityExclusionRepository;
 import com.jobhuntcopilot.db.JobRepository;
 import com.jobhuntcopilot.fetch.AdzunaSearchClient;
-import com.jobhuntcopilot.fetch.AdzunaSearchResponse;
 import com.jobhuntcopilot.fetch.JobFetchService;
 import com.jobhuntcopilot.model.Job;
 import com.jobhuntcopilot.model.JobStatus;
@@ -35,31 +36,42 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /** Fetching itself is covered by JobFetchServiceTest — this focuses on the filtering/scoring/dismiss logic that's new here. */
 class JobPipelineTest {
 
+    private static final EligibilityConfig NO_ELIGIBILITY_RULES = new EligibilityConfig(List.of(), 99);
+
     private static final RolesConfig ROLES_CONFIG = new RolesConfig(
             List.of(), new LocationPreference(List.of(), true), new RecencyRule(14),
-            new ScoringConfig(new ScoringWeights(0.35, 0.30, 0.20, 0.15), new SalaryTarget(80_000, 85_000, 90_000, "USD")));
+            new ScoringConfig(new ScoringWeights(0.35, 0.30, 0.20, 0.15), new SalaryTarget(80_000, 85_000, 90_000, "USD")),
+            NO_ELIGIBILITY_RULES);
 
+    private Database database;
     private JobRepository jobRepository;
+    private ApiCallRepository apiCallRepository;
+    private EligibilityExclusionRepository eligibilityExclusionRepository;
     private JobPipeline pipeline;
 
     @BeforeEach
     void setUp(@TempDir Path tempDir) {
-        Database database = new Database(tempDir.resolve("test.db"));
+        database = new Database(tempDir.resolve("test.db"));
         database.initSchema();
         jobRepository = new JobRepository(database);
-        ApiCallRepository apiCallRepository = new ApiCallRepository(database);
+        apiCallRepository = new ApiCallRepository(database);
+        eligibilityExclusionRepository = new EligibilityExclusionRepository(database);
 
+        pipeline = buildPipeline(ROLES_CONFIG);
+    }
+
+    private JobPipeline buildPipeline(RolesConfig rolesConfig) {
         AdzunaSearchClient neverCalled = (what, maxDaysOld, resultsPerPage) -> {
             throw new UnsupportedOperationException("fetch should not be invoked by these tests");
         };
+        BlocklistConfig blocklist = new BlocklistConfig(List.of("Blocked Inc"));
         JobFetchService fetchService = new JobFetchService(
-                neverCalled, jobRepository, apiCallRepository, new BlocklistConfig(List.of("Blocked Inc")),
-                ROLES_CONFIG.recency());
-        ScoringEngine scoringEngine = new ScoringEngine(Set.of(), ROLES_CONFIG);
+                neverCalled, jobRepository, apiCallRepository, eligibilityExclusionRepository, blocklist,
+                rolesConfig.recency(), rolesConfig.eligibility());
+        ScoringEngine scoringEngine = new ScoringEngine(Set.of(), rolesConfig);
 
-        pipeline = new JobPipeline(
-                ROLES_CONFIG, new BlocklistConfig(List.of("Blocked Inc")), jobRepository, fetchService,
-                apiCallRepository, scoringEngine);
+        return new JobPipeline(rolesConfig, blocklist, jobRepository, fetchService, apiCallRepository,
+                eligibilityExclusionRepository, scoringEngine);
     }
 
     @Test
@@ -115,6 +127,42 @@ class JobPipelineTest {
 
         assertTrue(pipeline.loadScoredJobs().isEmpty());
         assertFalse(jobRepository.findAll().isEmpty()); // still in the DB, just filtered from the view
+    }
+
+    @Test
+    void retroactivelyExcludesAnAlreadyStoredPostingThatFailsEligibilityUnderCurrentConfig() throws SQLException {
+        // Saved directly via the repository, bypassing JobFetchService's own fetch-time filter —
+        // simulates a posting that was already stored before this eligibility rule existed.
+        save(job("adzuna", "1", "Senior Solutions Engineer", "Acme Corp"));
+
+        EligibilityConfig excludesSenior = new EligibilityConfig(List.of("Senior"), 99);
+        RolesConfig tightenedConfig = new RolesConfig(
+                List.of(), new LocationPreference(List.of(), true), new RecencyRule(14),
+                ROLES_CONFIG.scoring(), excludesSenior);
+        JobPipeline tightenedPipeline = buildPipeline(tightenedConfig);
+
+        List<ScoredJob> loaded = tightenedPipeline.loadScoredJobs();
+
+        assertTrue(loaded.isEmpty());
+        List<EligibilityExclusionRepository.ExclusionLogEntry> exclusions = eligibilityExclusionRepository.findAll();
+        assertEquals(1, exclusions.size());
+        assertEquals("SENIORITY", exclusions.get(0).reason());
+    }
+
+    @Test
+    void reloadingDoesNotDuplicateTheExclusionLogRow() throws SQLException {
+        save(job("adzuna", "1", "Senior Solutions Engineer", "Acme Corp"));
+
+        EligibilityConfig excludesSenior = new EligibilityConfig(List.of("Senior"), 99);
+        RolesConfig tightenedConfig = new RolesConfig(
+                List.of(), new LocationPreference(List.of(), true), new RecencyRule(14),
+                ROLES_CONFIG.scoring(), excludesSenior);
+        JobPipeline tightenedPipeline = buildPipeline(tightenedConfig);
+
+        tightenedPipeline.loadScoredJobs();
+        tightenedPipeline.loadScoredJobs();
+
+        assertEquals(1, eligibilityExclusionRepository.findAll().size());
     }
 
     private Job save(Job job) throws SQLException {

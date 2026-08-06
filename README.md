@@ -47,6 +47,18 @@ The keyword matcher doesn't use a hand-maintained skills list — it strips `bas
 
 Every score comes with a breakdown, not just the number — see `ScoreFactor`/`ScoreBreakdown` in `src/main/java/com/jobhuntcopilot/score/`. The list view (below) shows the score itself; the full per-factor breakdown is coming to the detail view in Phase 5.
 
+## Eligibility filtering
+
+Added after Phase 4, since real fetched data made it obvious some results were things I'm simply not eligible for as a recent grad — not "lower fit," genuinely not eligible. These are hard excludes, not scoring penalties, and use the same fetch-time-plus-list-load-time pattern as the company blocklist (see `EligibilityFilter` in `src/main/java/com/jobhuntcopilot/eligibility/`):
+
+| Check | Excludes | Configurable in `config/roles.json` |
+|---|---|---|
+| Seniority title | Titles containing Senior, Sr., Lead, Principal, Staff, Manager, Director, Head of, VP, Chief, etc. | `eligibility.excludedTitleKeywords` |
+| Years of experience | Descriptions requiring more than N years (default 2) | `eligibility.maxYearsExperience` |
+| Active clearance | "must possess an active Secret clearance" — but *not* "eligible to obtain a clearance," which is normal language for entry-level GRC roles | Not configurable (parsing logic, not a preference) |
+
+Every exclusion is logged to the `eligibility_exclusions` table — source, title, company, reason, and the matched keyword/snippet — durable and queryable specifically so the filtering can be spot-checked for over-filtering rather than trusted blindly. It's idempotent (`INSERT OR IGNORE` on a unique posting key), so re-loading the list doesn't spam duplicate rows for something already excluded.
+
 ## List view
 
 The list is a ranked, scrollable table — score, title, company, salary, days since posted, location, and a status badge — with a **Dismiss** button per row that hides a posting from the default view for good (it's still in the database, just filtered out). **Refresh** re-runs the Adzuna fetch on a background thread so the window stays responsive while it's making network calls, then rescores and reloads the table. Company-blocklist filtering happens twice: once at fetch time (so a blocklisted company is never even stored) and again when the list loads (so adding a company to the blocklist retroactively hides anything already stored from them).
@@ -73,10 +85,11 @@ job-hunt-copilot/
 │   │   │   ├── text/                # Tokenizer — shared keyword tokenization
 │   │   │   ├── resume/              # LatexTextExtractor, ResumeKeywordExtractor
 │   │   │   ├── score/                # KeywordMatcher, *Scorer classes, ScoringEngine, ScoreBreakdown
+│   │   │   ├── eligibility/          # SeniorityTitleFilter, ExperienceRequirementParser, ClearanceFilter
 │   │   │   ├── pipeline/            # JobPipeline — non-UI fetch/score/dismiss orchestration
 │   │   │   └── gui/                 # JobListView — the JavaFX table
 │   │   └── resources/
-│   │       └── schema.sql           # SQLite DDL: jobs table, api_calls table
+│   │       └── schema.sql           # SQLite DDL: jobs, api_calls, eligibility_exclusions tables
 │   └── test/java/com/jobhuntcopilot/   # Mirrors main/ — one test class per component above
 ├── .env.example                     # Template for API keys — copy to .env and fill in (gitignored)
 ├── .gitignore
@@ -101,7 +114,7 @@ The window opens showing whatever's already in `data/jobhunt.db` (instant, no ne
 
 ### Editing the config
 
-`config/roles.json` and `config/blocklist.json` are meant to be hand-edited as my search evolves — no code changes needed to add a role, tweak a scoring weight, add a preferred metro, or block a company.
+`config/roles.json` and `config/blocklist.json` are meant to be hand-edited as my search evolves — no code changes needed to add a role, tweak a scoring weight, add a preferred metro, adjust the eligibility rules, or block a company.
 
 ## Roadmap
 
@@ -116,6 +129,14 @@ The window opens showing whatever's already in `data/jobhunt.db` (instant, no ne
 - [ ] **Phase 8** — Semi-automated apply flow (Greenhouse/Lever first)
 - [ ] **Phase 9** — Application history + CSV export
 - [ ] **Phase 10** — Polish: error handling, more tests, screenshots, demo GIF
+
+## What I learned — Eligibility filtering
+
+Regex-parsing "years of experience" out of free text turned out to be a small case study in why you verify against real data instead of trusting your own test cases. My first version required the word "experience" within 30 characters of a number on *either* side of it, which passed every test I wrote — and then immediately mis-fired on the very first live fetch: a Zions Bancorporation posting got excluded for "requiring 150+ years" of experience. The actual sentence was marketing copy — "providing the best experience possible for over 150 years" — describing the bank's history, not a job requirement. "Experience" was sitting a few words *before* an unrelated number, well within my window.
+
+The fix (checking only forward from the number, not backward) closed that hole, but a second live posting immediately found a different one: a staffing agency's own boilerplate, "TSR is a trusted staffing partner with more than 50 years of experience delivering qualified talent." Forward-only didn't catch this one because "experience" genuinely does come right after "50 years" here — the phrase is locally identical to a real requirement. What distinguished both false positives, once I looked at them side by side, wasn't the word "experience" at all — it was that the number was preceded by "over" or "more than," which is how you brag about accumulated history, not how a candidate requirement gets phrased ("5+ years," "minimum of 4 years"). That became the actual fix, and both mis-fires are now regression tests using the literal live text that broke it (`ExperienceRequirementParserTest`), not synthetic examples.
+
+The broader point: I built the durable `eligibility_exclusions` log specifically anticipating this kind of mistake, and it paid off within the first live run — being able to see the *exact* title, company, and matched detail for every exclusion turned two abstract "is this over-filtering?" worries into two concrete bugs I could read, reproduce, and fix. A dimension I hadn't had to think about yet: this was the first filter in the app where a false positive (wrongly hiding a job) and a false negative (wrongly showing a senior job) aren't equally bad — missing an exclusion just means a posting scores normally instead of disappearing, while a wrongful exclusion means never seeing it at all. Once I noticed that asymmetry, several close calls (like whether to also flag ambiguous clearance mentions) resolved themselves in the same direction: when unsure, don't exclude.
 
 ## What I learned — Phase 4
 

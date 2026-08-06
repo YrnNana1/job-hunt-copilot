@@ -1,5 +1,6 @@
 package com.jobhuntcopilot.score;
 
+import com.jobhuntcopilot.config.EligibilityConfig;
 import com.jobhuntcopilot.config.LocationPreference;
 import com.jobhuntcopilot.config.RecencyRule;
 import com.jobhuntcopilot.config.RolesConfig;
@@ -27,7 +28,8 @@ class ScoringEngineTest {
     private static final List<SearchTerm> SEARCH_TERMS = List.of(new SearchTerm("Solutions Engineer", "test"));
 
     private static final RolesConfig ROLES_CONFIG = new RolesConfig(
-            SEARCH_TERMS, LOCATION_PREFERENCE, RECENCY_RULE, new ScoringConfig(WEIGHTS, SALARY_TARGET));
+            SEARCH_TERMS, LOCATION_PREFERENCE, RECENCY_RULE, new ScoringConfig(WEIGHTS, SALARY_TARGET),
+            new EligibilityConfig(List.of(), 99));
 
     @Test
     void combinesAllFourFactorsUsingTheConfiguredWeights() {
