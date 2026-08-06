@@ -8,9 +8,9 @@ Built as a personal project to solve my own job search and to learn Java/softwar
 
 Job hunting means the same repetitive loop over and over: search several job boards for the same handful of role titles, skim postings to see if they're worth a look, hand-tailor a resume for the ones that are, then fill out the same eligibility/demographic questions on a slightly different form each time. This app automates the tedious, mechanical parts of that loop (searching, scoring, tailoring, form-filling) while keeping a human in the loop for every judgment call — nothing gets submitted without me reading it first.
 
-## Current status: Phase 5 — GUI detail view
+## Current status: Phase 6 — Resume tailoring (Claude API + LaTeX → PDF)
 
-Double-clicking a posting (or its **View Details** button) opens a full detail view: the complete per-factor score breakdown, all metadata, the full description, and actions to open the original posting or dismiss it. Opening a posting advances its status from NEW to VIEWED.
+The detail view now has a **Tailor Resume for This Posting** button. Clicking it sends only the *editable* content of `base_resume.tex` (Experience and Technical Projects bullets) to Claude Opus 4.5 along with the posting's title/company/description, asks it to reorder and reword bullets to surface keywords from the posting, reassembles the result into valid LaTeX, compiles it to PDF via Tectonic, and shows a diff/summary of every change (reworded, reordered, dropped) next to a button that opens the compiled PDF. See [Resume tailoring](#resume-tailoring) below for how the no-fabrication guarantees actually work.
 
 ![Job Hunt Copilot list view](docs/phase5-list-view.png)
 ![Job Hunt Copilot detail view](docs/phase5-detail-view.png)
@@ -22,8 +22,8 @@ Double-clicking a posting (or its **View Details** button) opens a full detail v
 - **Local storage:** SQLite via JDBC (`org.xerial:sqlite-jdbc`)
 - **Config parsing:** Gson (reads `config/roles.json` and `config/blocklist.json`)
 - **HTTP:** `java.net.http.HttpClient` (built into the JDK, no extra dependency)
-- **Resume tailoring:** Claude API (Anthropic) (Phase 6+)
-- **Resume format:** LaTeX (`.tex`) compiled to PDF via [Tectonic](https://tectonic-typesetting.github.io/) (Phase 6+)
+- **Resume tailoring:** Claude API (Anthropic), official `com.anthropic:anthropic-java` SDK, model `claude-opus-4-5`
+- **Resume format:** LaTeX (`.tex`) compiled to PDF via [Tectonic](https://tectonic-typesetting.github.io/)
 - **Browser automation for applying:** Selenium WebDriver, Selenium Manager for driver binaries (Phase 8+)
 - **Build tool:** Maven
 
@@ -76,7 +76,18 @@ Opening a posting (from the list) swaps to a full detail view in the same window
 
 Opening the detail view advances a NEW posting to VIEWED (never overwrites APPLIED or DISMISSED) — `JobPipeline.markViewed()`, called before the view is even constructed, so the view itself stays free of that side effect.
 
-No Apply button yet. The original design calls for one here, but it needs a tailored resume (Phase 6) and cover letter (Phase 7) to actually attach — a button that opens nothing isn't worth having yet.
+No Apply button yet. The original design calls for one here, but it needs a cover letter (Phase 7) too, to actually attach alongside the tailored resume — a button that opens nothing isn't worth having yet.
+
+## Resume tailoring
+
+Clicking **Tailor Resume for This Posting** (only for postings actually opened in detail view — never for every fetched posting, so it doesn't burn API calls on postings I never look at) runs this pipeline:
+
+1. **Parse** `base_resume.tex` (`ResumeParser`) into the two sections that are ever eligible for tailoring — Experience and Technical Projects bullets — plus everything else (preamble, header, Education, Certifications, Technical Skills, Leadership, and every entry's own title/dates/employer line) captured and passed through byte-for-byte, untouched.
+2. **Ask Claude** (`ClaudeResumeTailor`, model `claude-opus-4-5`) to reorder/reword/drop bullets to surface keywords from the posting. Claude is never shown job titles, employers, dates, degree, GPA, or certifications — those aren't part of the request at all, so they can't be changed no matter what Claude does. It's also never shown LaTeX — bullet text is unescaped to plain text before it's sent and re-escaped after, so a rewording can't corrupt a `\&`/`\%`/`\$` escape sequence.
+3. **Validate** the response: every bullet ID Claude returns must trace back to a real bullet already in `base_resume.tex` — there's no way for a bullet to appear that isn't a reordering/rewording of something already there. Missing or unrecognized IDs, or an entry left with zero bullets, fail loudly rather than silently dropping content.
+4. **Reassemble** (`ResumeAssembler`) the tailored LaTeX from the original document plus Claude's plan, then **compile** to PDF via Tectonic. If the result overflows to a second page, the lowest-priority project (by Claude's own ordering) is dropped and it recompiles, up to a bounded number of attempts, rather than shrinking formatting or breaking the one-page layout.
+5. **Cache** the result per posting (`tailored_resumes` table) so reopening the same posting's detail view doesn't re-call Claude.
+6. **Show a diff** — every reworded, reordered, or dropped bullet/project, with Claude's stated reason, right next to a button that opens the compiled PDF — so nothing gets used without being checked first. A lightweight heuristic (`FabricationHeuristic`) also flags any number (count, percentage, dollar amount) that appears in a reworded bullet but wasn't in the original, as an extra signal to double-check before trusting a rewording.
 
 ## Project layout
 
@@ -98,26 +109,27 @@ job-hunt-copilot/
 │   │   │   ├── db/                  # Database (schema init), JobRepository, ApiCallRepository
 │   │   │   ├── fetch/               # AdzunaClient, JobFetchService, FetchSummary
 │   │   │   ├── text/                # Tokenizer — shared keyword tokenization
-│   │   │   ├── resume/              # LatexTextExtractor, ResumeKeywordExtractor
+│   │   │   ├── resume/              # LatexTextExtractor, ResumeKeywordExtractor, ResumeParser, ResumeAssembler
 │   │   │   ├── score/                # KeywordMatcher, *Scorer classes, ScoringEngine, ScoreBreakdown
 │   │   │   ├── eligibility/          # SeniorityTitleFilter, ExperienceRequirementParser, ClearanceFilter
-│   │   │   ├── pipeline/            # JobPipeline — non-UI fetch/score/dismiss orchestration
+│   │   │   ├── tailor/              # ClaudeResumeTailor, ResumeTailoringService, TectonicCompiler, PdfPageCounter, FabricationHeuristic
+│   │   │   ├── pipeline/            # JobPipeline — non-UI fetch/score/dismiss/tailor orchestration
 │   │   │   └── gui/                 # MainView (navigation), JobListView, JobDetailView, shared formatting
 │   │   └── resources/
-│   │       └── schema.sql           # SQLite DDL: jobs, api_calls, eligibility_exclusions tables
+│   │       └── schema.sql           # SQLite DDL: jobs, api_calls, eligibility_exclusions, tailored_resumes tables
 │   └── test/java/com/jobhuntcopilot/   # Mirrors main/ — one test class per component above
 ├── .env.example                     # Template for API keys — copy to .env and fill in (gitignored)
 ├── .gitignore
 └── pom.xml
 ```
 
-`data/jobhunt.db` (the actual SQLite file) is created on first run and is gitignored — it's local runtime state, not source.
+`data/jobhunt.db` (the actual SQLite file) and `data/tailored-resumes/` (compiled tailored-resume PDFs) are created on first run and gitignored — local runtime state, not source.
 
 ## How to run it locally
 
-Requires Java 17+ and Maven.
+Requires Java 17+, Maven, and [Tectonic](https://tectonic-typesetting.github.io/) on `PATH` (for resume tailoring — `brew install tectonic` on macOS).
 
-1. Copy `.env.example` to `.env` and fill in `ADZUNA_APP_ID` / `ADZUNA_APP_KEY` (free from [developer.adzuna.com](https://developer.adzuna.com/)).
+1. Copy `.env.example` to `.env` and fill in `ADZUNA_APP_ID` / `ADZUNA_APP_KEY` (free from [developer.adzuna.com](https://developer.adzuna.com/)) and `ANTHROPIC_API_KEY` (from [console.anthropic.com](https://console.anthropic.com/)) for resume tailoring.
 2. Run it:
 
 ```bash
@@ -139,11 +151,23 @@ The window opens showing whatever's already in `data/jobhunt.db` (instant, no ne
 - [x] **Phase 3** — Scoring engine: keyword match, salary, recency, location fit
 - [x] **Phase 4** — GUI list view
 - [x] **Phase 5** — GUI detail view
-- [ ] **Phase 6** — Resume tailoring (Claude API + LaTeX→PDF)
+- [x] **Phase 6** — Resume tailoring (Claude API + LaTeX→PDF)
 - [ ] **Phase 7** — Cover letter generation
 - [ ] **Phase 8** — Semi-automated apply flow (Greenhouse/Lever first)
 - [ ] **Phase 9** — Application history + CSV export
 - [ ] **Phase 10** — Polish: error handling, more tests, screenshots, demo GIF
+
+## What I learned — Phase 6
+
+Three real bugs surfaced building this, and none of them were in the Claude integration itself — they were all in the LaTeX layer, and each one taught me something about testing this kind of pipeline.
+
+The first was discovered before I'd written a line of Phase 6 code: compiling `base_resume.tex` through Tectonic for the very first time (it had only ever been compiled elsewhere before) failed immediately with `Undefined control sequence` on `\pdfglyphtounicode`. Tectonic's engine is XeTeX-based, and `\input{glyphtounicode}` plus `\pdfgentounicode=1` are pdfTeX-only primitives — a known incompatibility for this whole family of popular resume templates. The fix was gating both behind `\ifPDFTeX` (from the `iftex` package, already loaded transitively via `hyperref`), which preserves the exact pdfTeX behavior if the file is ever compiled that way elsewhere, while making it a no-op — and therefore harmless — under Tectonic. Purely mechanical, zero visual change, but it meant the "already-installed, already-decided" tech stack piece (Tectonic) had actually never been exercised against the real resume until this phase.
+
+The second was a genuine design bug in `ResumeAssembler`, and it's the reason `ResumeTailoringServiceTest` compiles through the *real* Tectonic binary instead of just asserting on strings: `ResumeParser` splits `base_resume.tex` at the `\resumeSubheading`/`\resumeProjectHeading` macro calls, which means the surrounding `\resumeSubHeadingListStart`/`...End` wrapper tags end up captured *inside* the prefix/between/suffix text it treats as verbatim boilerplate. I'd written `ResumeAssembler` assuming those wrappers still needed to be emitted by the assembler itself — so every tailored resume had the itemize environment opened and closed twice, which XeTeX rejected as "missing \item." Every unit test that only inspected the generated string as text passed fine; it took an actual compile to catch it, because the bug was about environment nesting, not content. That's the whole justification for paying the cost of running a real LaTeX compile in a test suite that's otherwise fast and hermetic.
+
+The third only showed up against a live Claude response, not anything I could have written a fixture for in advance: Claude reworded a bullet containing `Finance \& Operations`, and its plain-text response used a literal `&` instead of preserving the LaTeX escape — which XeTeX read as a misplaced alignment-tab character and refused to compile. My first instinct was to just tell Claude in the prompt to preserve LaTeX escaping, but that's asking a model to reliably track a formatting convention it doesn't need to know exists. The actual fix was architectural: Claude never sees LaTeX at all now — bullet text is unescaped to plain English before it's sent, and whatever comes back is re-escaped before it's ever written into a `.tex` file. That's the same "guardrail via code structure, not prompting" pattern the entry-header exclusion already used (Claude is never shown titles/dates/employers as editable fields, so it can't touch them no matter what it does) — this just extended the same idea to LaTeX escaping.
+
+The no-fabrication guarantees held up well against a real posting: the live run correctly kept "94\%" and "1,000+" untouched, reworded five bullets to surface real keywords (Agile, Python, troubleshooting) without inventing anything, and dropped the least-relevant project on its own to fit one page — all traceable back to real content in `base_resume.tex`, exactly as the hard rules require.
 
 ## What I learned — Phase 5
 

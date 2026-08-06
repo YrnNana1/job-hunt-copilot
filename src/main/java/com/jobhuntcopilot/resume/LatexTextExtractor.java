@@ -56,4 +56,17 @@ public class LatexTextExtractor {
                 .replace("\\%", "%")
                 .replace("\\_", "_");
     }
+
+    /**
+     * The reverse of the special-character unescaping above — used to turn plain text (e.g. a
+     * bullet reworded by Claude, which only ever sees/produces plain text, never LaTeX escape
+     * sequences) back into valid LaTeX before it's inserted into a .tex source.
+     */
+    public static String escapeSpecialCharacters(String text) {
+        return text.replace("#", "\\#")
+                .replace("&", "\\&")
+                .replace("$", "\\$")
+                .replace("%", "\\%")
+                .replace("_", "\\_");
+    }
 }

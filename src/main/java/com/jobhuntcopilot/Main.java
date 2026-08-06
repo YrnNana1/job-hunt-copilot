@@ -8,12 +8,16 @@ import com.jobhuntcopilot.db.ApiCallRepository;
 import com.jobhuntcopilot.db.Database;
 import com.jobhuntcopilot.db.EligibilityExclusionRepository;
 import com.jobhuntcopilot.db.JobRepository;
+import com.jobhuntcopilot.db.TailoredResumeRepository;
 import com.jobhuntcopilot.fetch.AdzunaClient;
 import com.jobhuntcopilot.fetch.JobFetchService;
 import com.jobhuntcopilot.gui.MainView;
 import com.jobhuntcopilot.pipeline.JobPipeline;
 import com.jobhuntcopilot.resume.ResumeKeywordExtractor;
 import com.jobhuntcopilot.score.ScoringEngine;
+import com.jobhuntcopilot.tailor.ClaudeResumeTailor;
+import com.jobhuntcopilot.tailor.ResumeTailoringService;
+import com.jobhuntcopilot.tailor.TectonicCompiler;
 import javafx.application.Application;
 import javafx.scene.Scene;
 import javafx.stage.Stage;
@@ -26,8 +30,9 @@ import java.util.Set;
  *
  * Phase 0 was the Maven skeleton, Phase 1 added config + the database,
  * Phase 2 fetched real postings from Adzuna, Phase 3 added scoring, Phase 4
- * replaced the console printout with a JavaFX window, and Phase 5 (this
- * one) adds the detail view — MainView now owns navigation between the two.
+ * replaced the console printout with a JavaFX window, Phase 5 added the
+ * detail view, and Phase 6 (this one) adds Claude-powered resume tailoring
+ * compiled to PDF via Tectonic.
  */
 public class Main extends Application {
 
@@ -57,6 +62,7 @@ public class Main extends Application {
         JobRepository jobRepository = new JobRepository(database);
         ApiCallRepository apiCallRepository = new ApiCallRepository(database);
         EligibilityExclusionRepository eligibilityExclusionRepository = new EligibilityExclusionRepository(database);
+        TailoredResumeRepository tailoredResumeRepository = new TailoredResumeRepository(database);
 
         AdzunaClient adzunaClient = new AdzunaClient(
                 EnvLoader.require("ADZUNA_APP_ID"), EnvLoader.require("ADZUNA_APP_KEY"));
@@ -64,10 +70,16 @@ public class Main extends Application {
                 adzunaClient, jobRepository, apiCallRepository, eligibilityExclusionRepository, blocklist,
                 roles.recency(), roles.eligibility());
 
-        Set<String> resumeKeywords = ResumeKeywordExtractor.extractKeywords(Path.of("resources", "base_resume.tex"));
+        Path baseResumePath = Path.of("resources", "base_resume.tex");
+        Set<String> resumeKeywords = ResumeKeywordExtractor.extractKeywords(baseResumePath);
         ScoringEngine scoringEngine = new ScoringEngine(resumeKeywords, roles);
 
+        ClaudeResumeTailor claudeResumeTailor = new ClaudeResumeTailor(EnvLoader.require("ANTHROPIC_API_KEY"));
+        ResumeTailoringService resumeTailoringService = new ResumeTailoringService(
+                baseResumePath, Path.of("data", "tailored-resumes"), claudeResumeTailor, new TectonicCompiler(),
+                tailoredResumeRepository);
+
         return new JobPipeline(roles, blocklist, jobRepository, fetchService, apiCallRepository,
-                eligibilityExclusionRepository, scoringEngine);
+                eligibilityExclusionRepository, scoringEngine, resumeTailoringService);
     }
 }

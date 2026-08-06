@@ -70,8 +70,9 @@ class JobPipelineTest {
                 rolesConfig.recency(), rolesConfig.eligibility());
         ScoringEngine scoringEngine = new ScoringEngine(Set.of(), rolesConfig);
 
+        // Resume tailoring (Phase 6) isn't exercised by these tests — see ResumeTailoringServiceTest.
         return new JobPipeline(rolesConfig, blocklist, jobRepository, fetchService, apiCallRepository,
-                eligibilityExclusionRepository, scoringEngine);
+                eligibilityExclusionRepository, scoringEngine, null);
     }
 
     @Test

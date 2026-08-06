@@ -67,3 +67,18 @@ CREATE TABLE IF NOT EXISTS eligibility_exclusions (
     excluded_at TEXT NOT NULL,
     UNIQUE (source, external_id)
 );
+
+-- One row per posting a tailored resume has been generated for (Phase 6) — the cache that
+-- keeps re-opening the same posting's detail view from burning another Claude API call.
+-- The compiled PDF lives on disk (data/tailored-resumes/) — this row keeps the path plus the
+-- tailored LaTeX and the change summary (as JSON) that JobDetailView renders as a diff.
+CREATE TABLE IF NOT EXISTS tailored_resumes (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id       INTEGER NOT NULL REFERENCES jobs(id),
+    latex        TEXT NOT NULL,
+    pdf_path     TEXT NOT NULL,
+    changes_json TEXT NOT NULL,
+    model        TEXT NOT NULL,
+    generated_at TEXT NOT NULL,
+    UNIQUE (job_id)
+);

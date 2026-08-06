@@ -13,6 +13,8 @@ import com.jobhuntcopilot.model.Job;
 import com.jobhuntcopilot.model.JobStatus;
 import com.jobhuntcopilot.score.ScoredJob;
 import com.jobhuntcopilot.score.ScoringEngine;
+import com.jobhuntcopilot.tailor.ResumeTailoringService;
+import com.jobhuntcopilot.tailor.TailoredResumeView;
 
 import java.sql.SQLException;
 import java.time.Duration;
@@ -37,6 +39,7 @@ public class JobPipeline {
     private final EligibilityExclusionRepository eligibilityExclusionRepository;
     private final ScoringEngine scoringEngine;
     private final EligibilityFilter eligibilityFilter;
+    private final ResumeTailoringService resumeTailoringService;
 
     public JobPipeline(
             RolesConfig rolesConfig,
@@ -45,7 +48,8 @@ public class JobPipeline {
             JobFetchService fetchService,
             ApiCallRepository apiCallRepository,
             EligibilityExclusionRepository eligibilityExclusionRepository,
-            ScoringEngine scoringEngine) {
+            ScoringEngine scoringEngine,
+            ResumeTailoringService resumeTailoringService) {
         this.rolesConfig = rolesConfig;
         this.blocklistConfig = blocklistConfig;
         this.jobRepository = jobRepository;
@@ -54,6 +58,7 @@ public class JobPipeline {
         this.eligibilityExclusionRepository = eligibilityExclusionRepository;
         this.scoringEngine = scoringEngine;
         this.eligibilityFilter = new EligibilityFilter(rolesConfig.eligibility());
+        this.resumeTailoringService = resumeTailoringService;
     }
 
     /**
@@ -105,6 +110,15 @@ public class JobPipeline {
         if (job.getStatus() == JobStatus.NEW) {
             jobRepository.updateStatus(job.getId(), JobStatus.VIEWED);
         }
+    }
+
+    /**
+     * Generates (or returns the cached) tailored resume for this posting — only called when the
+     * detail view's "Tailor Resume" button is clicked, never for every fetched posting, since it
+     * costs a real Claude API call and a LaTeX compile.
+     */
+    public TailoredResumeView tailorResume(Job job) throws SQLException {
+        return resumeTailoringService.tailor(job);
     }
 
     public int apiCallsInLast24Hours() throws SQLException {
