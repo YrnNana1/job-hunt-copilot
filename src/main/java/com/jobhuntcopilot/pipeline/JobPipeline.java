@@ -100,6 +100,13 @@ public class JobPipeline {
         jobRepository.updateStatus(job.getId(), JobStatus.DISMISSED);
     }
 
+    /** Called when the detail view opens for a posting — only advances NEW to VIEWED, never overwrites APPLIED/DISMISSED. */
+    public void markViewed(Job job) throws SQLException {
+        if (job.getStatus() == JobStatus.NEW) {
+            jobRepository.updateStatus(job.getId(), JobStatus.VIEWED);
+        }
+    }
+
     public int apiCallsInLast24Hours() throws SQLException {
         return apiCallRepository.countCallsSince(Instant.now().minus(Duration.ofDays(1)));
     }

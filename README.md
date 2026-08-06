@@ -8,11 +8,12 @@ Built as a personal project to solve my own job search and to learn Java/softwar
 
 Job hunting means the same repetitive loop over and over: search several job boards for the same handful of role titles, skim postings to see if they're worth a look, hand-tailor a resume for the ones that are, then fill out the same eligibility/demographic questions on a slightly different form each time. This app automates the tedious, mechanical parts of that loop (searching, scoring, tailoring, form-filling) while keeping a human in the loop for every judgment call — nothing gets submitted without me reading it first.
 
-## Current status: Phase 4 — GUI list view
+## Current status: Phase 5 — GUI detail view
 
-The console is gone — the app now opens as a JavaFX window: a ranked, scrollable table of every scored posting with a status badge and a Dismiss button per row, and a Refresh button that fetches new postings from Adzuna in the background without freezing the UI.
+Double-clicking a posting (or its **View Details** button) opens a full detail view: the complete per-factor score breakdown, all metadata, the full description, and actions to open the original posting or dismiss it. Opening a posting advances its status from NEW to VIEWED.
 
-![Job Hunt Copilot list view](docs/phase4-list-view.png)
+![Job Hunt Copilot list view](docs/phase5-list-view.png)
+![Job Hunt Copilot detail view](docs/phase5-detail-view.png)
 
 ## Tech stack
 
@@ -45,7 +46,7 @@ Every posting gets a 0-100 score, computed as four weighted factors (weights liv
 
 The keyword matcher doesn't use a hand-maintained skills list — it strips `base_resume.tex` down to plain text (stripping LaTeX commands, keeping visible content) and tokenizes the whole thing, so the resume file stays the single source of truth. Nothing is a hard filter here: a posting below my salary floor or outside my preferred metros still gets scored and shown, just lower — dismissing is a manual decision (Phase 4+), not something the scorer does for me.
 
-Every score comes with a breakdown, not just the number — see `ScoreFactor`/`ScoreBreakdown` in `src/main/java/com/jobhuntcopilot/score/`. The list view (below) shows the score itself; the full per-factor breakdown is coming to the detail view in Phase 5.
+Every score comes with a breakdown, not just the number — see `ScoreFactor`/`ScoreBreakdown` in `src/main/java/com/jobhuntcopilot/score/`. The list view shows the total; the detail view (below) shows the full per-factor breakdown.
 
 ## Eligibility filtering
 
@@ -61,7 +62,21 @@ Every exclusion is logged to the `eligibility_exclusions` table — source, titl
 
 ## List view
 
-The list is a ranked, scrollable table — score, title, company, salary, days since posted, location, and a status badge — with a **Dismiss** button per row that hides a posting from the default view for good (it's still in the database, just filtered out). **Refresh** re-runs the Adzuna fetch on a background thread so the window stays responsive while it's making network calls, then rescores and reloads the table. Company-blocklist filtering happens twice: once at fetch time (so a blocklisted company is never even stored) and again when the list loads (so adding a company to the blocklist retroactively hides anything already stored from them).
+The list is a ranked, scrollable table — score, title, company, salary, days since posted, location, and a status badge — with a **View Details** button per row (double-clicking a row does the same thing) and a **Dismiss** button that hides a posting from the default view for good (it's still in the database, just filtered out). **Refresh** re-runs the Adzuna fetch on a background thread so the window stays responsive while it's making network calls, then rescores and reloads the table. Company-blocklist filtering happens twice: once at fetch time (so a blocklisted company is never even stored) and again when the list loads (so adding a company to the blocklist retroactively hides anything already stored from them).
+
+## Detail view
+
+Opening a posting (from the list) swaps to a full detail view in the same window — no second window to manage, `MainView` just swaps what's in the center of the layout. It shows:
+
+- **Full score breakdown** — every `ScoreFactor` with its points, weight, raw percentage, and the plain-language explanation behind it (which resume keywords matched, why the salary/location/recency scored the way they did).
+- **Metadata** — location, salary, posted date, source.
+- **The full job description.**
+- **Open posting ↗** — opens the original listing in the system browser via JavaFX's `HostServices`.
+- **Dismiss** — same hard-hide behavior as the list view's Dismiss button, then returns to the list.
+
+Opening the detail view advances a NEW posting to VIEWED (never overwrites APPLIED or DISMISSED) — `JobPipeline.markViewed()`, called before the view is even constructed, so the view itself stays free of that side effect.
+
+No Apply button yet. The original design calls for one here, but it needs a tailored resume (Phase 6) and cover letter (Phase 7) to actually attach — a button that opens nothing isn't worth having yet.
 
 ## Project layout
 
@@ -73,7 +88,7 @@ job-hunt-copilot/
 ├── resources/
 │   └── base_resume.tex              # My base LaTeX resume — source of truth for all tailored versions
 ├── docs/
-│   └── phase4-list-view.png          # Screenshot used in this README
+│   └── *.png                        # Screenshots used in this README
 ├── src/
 │   ├── main/
 │   │   ├── java/com/jobhuntcopilot/
@@ -87,7 +102,7 @@ job-hunt-copilot/
 │   │   │   ├── score/                # KeywordMatcher, *Scorer classes, ScoringEngine, ScoreBreakdown
 │   │   │   ├── eligibility/          # SeniorityTitleFilter, ExperienceRequirementParser, ClearanceFilter
 │   │   │   ├── pipeline/            # JobPipeline — non-UI fetch/score/dismiss orchestration
-│   │   │   └── gui/                 # JobListView — the JavaFX table
+│   │   │   └── gui/                 # MainView (navigation), JobListView, JobDetailView, shared formatting
 │   │   └── resources/
 │   │       └── schema.sql           # SQLite DDL: jobs, api_calls, eligibility_exclusions tables
 │   └── test/java/com/jobhuntcopilot/   # Mirrors main/ — one test class per component above
@@ -123,12 +138,20 @@ The window opens showing whatever's already in `data/jobhunt.db` (instant, no ne
 - [x] **Phase 2** — Job fetching: Adzuna client, 14-day filter, dedupe, quota logging
 - [x] **Phase 3** — Scoring engine: keyword match, salary, recency, location fit
 - [x] **Phase 4** — GUI list view
-- [ ] **Phase 5** — GUI detail view
+- [x] **Phase 5** — GUI detail view
 - [ ] **Phase 6** — Resume tailoring (Claude API + LaTeX→PDF)
 - [ ] **Phase 7** — Cover letter generation
 - [ ] **Phase 8** — Semi-automated apply flow (Greenhouse/Lever first)
 - [ ] **Phase 9** — Application history + CSV export
 - [ ] **Phase 10** — Polish: error handling, more tests, screenshots, demo GIF
+
+## What I learned — Phase 5
+
+The navigation decision was simpler than I expected once I framed it right: swap the content inside one `BorderPane` (`MainView`) rather than open a second `Stage`. A separate window means managing its lifecycle — position, whether closing it should close the app, what happens if you open two detail views at once — for no real benefit here, since I never need to see the list and a detail view at the same time. `JobListView` takes a callback (`Consumer<ScoredJob>`) instead of knowing anything about `MainView`, and `JobDetailView` takes a plain `Runnable onBack` — neither view knows the other exists, `MainView` is the only thing that does.
+
+Reviewing the actual rendered detail view caught a real data-quality bug that unit tests wouldn't have: some Adzuna descriptions contain the literal two characters `\n` instead of a real line break, so the "Full Description" panel showed visible backslash-n text in the middle of sentences. I fixed it at the source (`JobFetchService.toJob()`) rather than patching the display, since the same raw description will feed Phase 6's resume tailoring later — cleaning it once means every future reader of `Job.description` gets clean text, not just this view.
+
+The more interesting story was a false alarm I almost mis-attributed. While screenshotting the detail view against real fetched data, one posting showed status VIEWED when I expected NEW — and I had *not* clicked anything to cause that (accessibility permissions block UI automation in this environment entirely). Before writing it up as a bug, I `grep`ed the codebase for every call to `markViewed` and confirmed exactly one call site (`MainView.showDetail`), reachable only through real user interaction that hadn't happened in my scratch-class runs. I checked the database directly — one row out of thirty-five was VIEWED, and its `updated_at` timestamp was a red herring (it gets touched by every `loadScoredJobs()` call, status or not). I couldn't find a code path that explained it, and given this runs on the user's actual machine with a real display and a real mouse, the most likely explanation is a stray real click during the debugging session itself, not application logic. The honest conclusion here isn't "confirmed harmless" — it's "ruled out as a code defect via the evidence available, and not worth more time chasing a non-reproducible one-off." Those are different claims, and it's worth being precise about which one you actually have.
 
 ## What I learned — Eligibility filtering
 

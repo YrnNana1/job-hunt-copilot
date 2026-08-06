@@ -130,6 +130,29 @@ class JobPipelineTest {
     }
 
     @Test
+    void markViewedAdvancesNewToViewed() throws SQLException {
+        Job saved = save(job("adzuna", "1", "Solutions Engineer", "Acme Corp"));
+        assertEquals(JobStatus.NEW, saved.getStatus());
+
+        pipeline.markViewed(saved);
+
+        Job reloaded = jobRepository.findAll().get(0);
+        assertEquals(JobStatus.VIEWED, reloaded.getStatus());
+    }
+
+    @Test
+    void markViewedDoesNotOverwriteApplied() throws SQLException {
+        Job saved = save(job("adzuna", "1", "Solutions Engineer", "Acme Corp"));
+        jobRepository.updateStatus(saved.getId(), JobStatus.APPLIED);
+        saved.setStatus(JobStatus.APPLIED);
+
+        pipeline.markViewed(saved);
+
+        Job reloaded = jobRepository.findAll().get(0);
+        assertEquals(JobStatus.APPLIED, reloaded.getStatus());
+    }
+
+    @Test
     void retroactivelyExcludesAnAlreadyStoredPostingThatFailsEligibilityUnderCurrentConfig() throws SQLException {
         // Saved directly via the repository, bypassing JobFetchService's own fetch-time filter —
         // simulates a posting that was already stored before this eligibility rule existed.

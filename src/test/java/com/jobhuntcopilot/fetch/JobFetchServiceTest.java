@@ -96,6 +96,21 @@ class JobFetchServiceTest {
     }
 
     @Test
+    void cleansLiteralBackslashNSequencesInDescriptions() throws SQLException {
+        // Some real Adzuna descriptions contain the literal two characters "\n" instead of an
+        // actual newline — caught while reviewing the Phase 5 detail view, where it rendered
+        // as visible "\n" text in the middle of the description.
+        fakeClient.respondWith("Solutions Engineer", buildResponse(
+                jobJson("1", "Solutions Engineer", "Acme Corp", "Remote", 1, "Line one.\\nLine two.")));
+
+        JobFetchService service = newService(new BlocklistConfig(List.of()));
+        service.fetchAll(List.of(new SearchTerm("Solutions Engineer", "test")));
+
+        String description = jobRepository.findAll().get(0).getDescription();
+        assertEquals("Line one.\nLine two.", description);
+    }
+
+    @Test
     void aPostingAlreadyInTheDatabaseIsCountedAsADuplicateNotInserted() throws SQLException {
         Job existing = new Job("adzuna", "42", "AI Engineer", "Acme Corp", "Remote", true,
                 "desc", "https://example.com/job/42", 80000.0, 100000.0, "USD", LocalDate.now(), Instant.now());
@@ -152,10 +167,15 @@ class JobFetchServiceTest {
     }
 
     private JsonObject jobJson(String id, String title, String company, String location, int daysAgo) {
+        return jobJson(id, title, company, location, daysAgo, "A great job description.");
+    }
+
+    private JsonObject jobJson(
+            String id, String title, String company, String location, int daysAgo, String description) {
         JsonObject job = new JsonObject();
         job.addProperty("id", id);
         job.addProperty("title", title);
-        job.addProperty("description", "A great job description.");
+        job.addProperty("description", description);
         job.addProperty("redirect_url", "https://example.com/job/" + id);
         job.addProperty("salary_min", 80000.0);
         job.addProperty("salary_max", 100000.0);

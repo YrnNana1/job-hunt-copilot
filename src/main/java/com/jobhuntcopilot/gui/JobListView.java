@@ -16,38 +16,42 @@ import javafx.scene.control.Button;
 import javafx.scene.control.Label;
 import javafx.scene.control.TableCell;
 import javafx.scene.control.TableColumn;
+import javafx.scene.control.TableRow;
 import javafx.scene.control.TableView;
+import javafx.scene.input.MouseButton;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 
 import java.sql.SQLException;
-import java.time.LocalDate;
-import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.function.Consumer;
 
 /**
- * The Phase 4 list view: a ranked, scrollable table of scored postings with a
- * status badge and a per-row Dismiss button, plus a Refresh button that
- * fetches new postings from Adzuna. Fetching runs on a background thread —
- * it makes real HTTP calls, and blocking the JavaFX Application Thread would
+ * The list view: a ranked, scrollable table of scored postings with a status
+ * badge, a per-row View Details button (double-clicking a row does the same
+ * thing) that hands off to the detail view, and a per-row Dismiss button.
+ * Refresh fetches new postings from Adzuna on a background thread — it
+ * makes real HTTP calls, and blocking the JavaFX Application Thread would
  * freeze the whole window until it finished.
  */
 public class JobListView extends BorderPane {
 
     private final JobPipeline pipeline;
+    private final Consumer<ScoredJob> onViewDetails;
     private final TableView<ScoredJob> table = new TableView<>();
     private final Label statusLabel = new Label();
     private final Button refreshButton = new Button("Refresh");
 
-    public JobListView(JobPipeline pipeline) {
+    public JobListView(JobPipeline pipeline, Consumer<ScoredJob> onViewDetails) {
         this.pipeline = pipeline;
+        this.onViewDetails = onViewDetails;
         setPadding(new Insets(10));
         setTop(buildToolbar());
         setCenter(buildTable());
     }
 
-    /** Loads whatever's already in the database — fast, local, no network — so the window isn't empty on startup. */
-    public void loadInitial() {
+    /** Re-reads whatever's in the database — fast, local, no network — used both on startup and after returning from the detail view. */
+    public void reload() {
         try {
             List<ScoredJob> jobs = pipeline.loadScoredJobs();
             table.setItems(FXCollections.observableArrayList(jobs));
@@ -68,9 +72,18 @@ public class JobListView extends BorderPane {
     private TableView<ScoredJob> buildTable() {
         table.getColumns().addAll(List.of(
                 scoreColumn(), titleColumn(), companyColumn(), salaryColumn(),
-                postedColumn(), locationColumn(), statusColumn(), dismissColumn()));
+                postedColumn(), locationColumn(), statusColumn(), viewColumn(), dismissColumn()));
         table.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY);
         table.setPlaceholder(new Label("No postings yet — click Refresh to fetch from Adzuna."));
+        table.setRowFactory(tv -> {
+            TableRow<ScoredJob> row = new TableRow<>();
+            row.setOnMouseClicked(event -> {
+                if (event.getClickCount() == 2 && !row.isEmpty() && event.getButton() == MouseButton.PRIMARY) {
+                    onViewDetails.accept(row.getItem());
+                }
+            });
+            return row;
+        });
         return table;
     }
 
@@ -137,13 +150,14 @@ public class JobListView extends BorderPane {
 
     private TableColumn<ScoredJob, String> salaryColumn() {
         TableColumn<ScoredJob, String> column = new TableColumn<>("Salary");
-        column.setCellValueFactory(data -> new SimpleStringProperty(formatSalary(data.getValue().job())));
+        column.setCellValueFactory(data -> new SimpleStringProperty(JobFormatting.formatSalary(data.getValue().job())));
         return column;
     }
 
     private TableColumn<ScoredJob, String> postedColumn() {
         TableColumn<ScoredJob, String> column = new TableColumn<>("Posted");
-        column.setCellValueFactory(data -> new SimpleStringProperty(formatPosted(data.getValue().job().getPostedDate())));
+        column.setCellValueFactory(data -> new SimpleStringProperty(
+                JobFormatting.formatPosted(data.getValue().job().getPostedDate())));
         return column;
     }
 
@@ -169,7 +183,7 @@ public class JobListView extends BorderPane {
                     setStyle("");
                 } else {
                     setText(status.name());
-                    setStyle("-fx-background-color: " + badgeColor(status)
+                    setStyle("-fx-background-color: " + StatusBadges.colorFor(status)
                             + "; -fx-text-fill: white; -fx-alignment: CENTER;");
                 }
             }
@@ -177,8 +191,30 @@ public class JobListView extends BorderPane {
         return column;
     }
 
+    private TableColumn<ScoredJob, Void> viewColumn() {
+        TableColumn<ScoredJob, Void> column = new TableColumn<>("");
+        column.setMinWidth(110);
+        column.setMaxWidth(110);
+        column.setCellFactory(col -> new TableCell<>() {
+            private final Button viewButton = new Button("View Details");
+
+            {
+                viewButton.setOnAction(event -> onViewDetails.accept(getTableView().getItems().get(getIndex())));
+            }
+
+            @Override
+            protected void updateItem(Void item, boolean empty) {
+                super.updateItem(item, empty);
+                setGraphic(empty ? null : viewButton);
+            }
+        });
+        return column;
+    }
+
     private TableColumn<ScoredJob, Void> dismissColumn() {
         TableColumn<ScoredJob, Void> column = new TableColumn<>("");
+        column.setMinWidth(90);
+        column.setMaxWidth(90);
         column.setCellFactory(col -> new TableCell<>() {
             private final Button dismissButton = new Button("Dismiss");
 
@@ -195,36 +231,4 @@ public class JobListView extends BorderPane {
         return column;
     }
 
-    private static String formatSalary(Job job) {
-        Double min = job.getSalaryMin();
-        Double max = job.getSalaryMax();
-        if (min == null && max == null) {
-            return "—";
-        }
-        if (min == null || max == null || min.equals(max)) {
-            return "$" + formatThousands(min != null ? min : max);
-        }
-        return "$" + formatThousands(min) + " - $" + formatThousands(max);
-    }
-
-    private static String formatThousands(double value) {
-        return Math.round(value / 1000) + "k";
-    }
-
-    private static String formatPosted(LocalDate postedDate) {
-        long daysOld = ChronoUnit.DAYS.between(postedDate, LocalDate.now());
-        if (daysOld <= 0) {
-            return "Today";
-        }
-        return daysOld == 1 ? "1 day ago" : daysOld + " days ago";
-    }
-
-    private static String badgeColor(JobStatus status) {
-        return switch (status) {
-            case NEW -> "#3b82f6";
-            case VIEWED -> "#6b7280";
-            case APPLIED -> "#16a34a";
-            case DISMISSED -> "#dc2626";
-        };
-    }
 }

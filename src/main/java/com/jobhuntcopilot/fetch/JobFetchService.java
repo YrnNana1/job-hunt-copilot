@@ -158,13 +158,18 @@ public class JobFetchService {
                 company,
                 location,
                 remote,
-                result.getDescription(),
+                cleanDescription(result.getDescription()),
                 result.getRedirectUrl(),
                 result.getSalaryMin(),
                 result.getSalaryMax(),
                 result.getSalaryMin() != null || result.getSalaryMax() != null ? "USD" : null,
                 postedDate,
                 Instant.now());
+    }
+
+    /** Some Adzuna descriptions contain the literal two characters "\n" instead of a real newline — clean that up once here, at the source, rather than in every view/parser that reads Job.description. */
+    private static String cleanDescription(String description) {
+        return description == null ? null : description.replace("\\n", "\n").trim();
     }
 
     private LocalDate parsePostedDate(String created) {

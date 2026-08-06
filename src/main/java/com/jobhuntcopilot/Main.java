@@ -10,7 +10,7 @@ import com.jobhuntcopilot.db.EligibilityExclusionRepository;
 import com.jobhuntcopilot.db.JobRepository;
 import com.jobhuntcopilot.fetch.AdzunaClient;
 import com.jobhuntcopilot.fetch.JobFetchService;
-import com.jobhuntcopilot.gui.JobListView;
+import com.jobhuntcopilot.gui.MainView;
 import com.jobhuntcopilot.pipeline.JobPipeline;
 import com.jobhuntcopilot.resume.ResumeKeywordExtractor;
 import com.jobhuntcopilot.score.ScoringEngine;
@@ -25,9 +25,9 @@ import java.util.Set;
  * Entry point for Job Hunt Copilot.
  *
  * Phase 0 was the Maven skeleton, Phase 1 added config + the database,
- * Phase 2 fetched real postings from Adzuna, Phase 3 added scoring, and
- * Phase 4 (this one) replaces the console printout with a JavaFX window —
- * the console phases proved each piece worked before wiring them into a UI.
+ * Phase 2 fetched real postings from Adzuna, Phase 3 added scoring, Phase 4
+ * replaced the console printout with a JavaFX window, and Phase 5 (this
+ * one) adds the detail view — MainView now owns navigation between the two.
  */
 public class Main extends Application {
 
@@ -39,11 +39,11 @@ public class Main extends Application {
     public void start(Stage primaryStage) throws Exception {
         JobPipeline pipeline = buildPipeline();
 
-        JobListView listView = new JobListView(pipeline);
-        listView.loadInitial();
+        MainView mainView = new MainView(pipeline, getHostServices());
+        mainView.loadInitial();
 
         primaryStage.setTitle("Job Hunt Copilot");
-        primaryStage.setScene(new Scene(listView, 1150, 700));
+        primaryStage.setScene(new Scene(mainView, 1150, 700));
         primaryStage.show();
     }
 
