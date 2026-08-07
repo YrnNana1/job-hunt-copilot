@@ -82,3 +82,17 @@ CREATE TABLE IF NOT EXISTS tailored_resumes (
     generated_at TEXT NOT NULL,
     UNIQUE (job_id)
 );
+
+-- One row per posting a cover letter has been generated for (Phase 7) - same caching purpose
+-- as tailored_resumes above. The compiled PDF lives on disk (data/cover-letters/) - this row
+-- keeps the path plus the tailored LaTeX and the change summary (as JSON).
+CREATE TABLE IF NOT EXISTS cover_letters (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id       INTEGER NOT NULL REFERENCES jobs(id),
+    latex        TEXT NOT NULL,
+    pdf_path     TEXT NOT NULL,
+    changes_json TEXT NOT NULL,
+    model        TEXT NOT NULL,
+    generated_at TEXT NOT NULL,
+    UNIQUE (job_id)
+);

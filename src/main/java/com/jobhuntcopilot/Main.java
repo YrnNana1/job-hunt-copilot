@@ -4,7 +4,10 @@ import com.jobhuntcopilot.config.BlocklistConfig;
 import com.jobhuntcopilot.config.ConfigLoader;
 import com.jobhuntcopilot.config.EnvLoader;
 import com.jobhuntcopilot.config.RolesConfig;
+import com.jobhuntcopilot.coverletter.ClaudeCoverLetterWriter;
+import com.jobhuntcopilot.coverletter.CoverLetterGenerationService;
 import com.jobhuntcopilot.db.ApiCallRepository;
+import com.jobhuntcopilot.db.CoverLetterRepository;
 import com.jobhuntcopilot.db.Database;
 import com.jobhuntcopilot.db.EligibilityExclusionRepository;
 import com.jobhuntcopilot.db.JobRepository;
@@ -31,8 +34,8 @@ import java.util.Set;
  * Phase 0 was the Maven skeleton, Phase 1 added config + the database,
  * Phase 2 fetched real postings from Adzuna, Phase 3 added scoring, Phase 4
  * replaced the console printout with a JavaFX window, Phase 5 added the
- * detail view, and Phase 6 (this one) adds Claude-powered resume tailoring
- * compiled to PDF via Tectonic.
+ * detail view, Phase 6 added Claude-powered resume tailoring compiled to PDF
+ * via Tectonic, and Phase 7 (this one) adds the same for cover letters.
  */
 public class Main extends Application {
 
@@ -63,6 +66,7 @@ public class Main extends Application {
         ApiCallRepository apiCallRepository = new ApiCallRepository(database);
         EligibilityExclusionRepository eligibilityExclusionRepository = new EligibilityExclusionRepository(database);
         TailoredResumeRepository tailoredResumeRepository = new TailoredResumeRepository(database);
+        CoverLetterRepository coverLetterRepository = new CoverLetterRepository(database);
 
         AdzunaClient adzunaClient = new AdzunaClient(
                 EnvLoader.require("ADZUNA_APP_ID"), EnvLoader.require("ADZUNA_APP_KEY"));
@@ -74,12 +78,18 @@ public class Main extends Application {
         Set<String> resumeKeywords = ResumeKeywordExtractor.extractKeywords(baseResumePath);
         ScoringEngine scoringEngine = new ScoringEngine(resumeKeywords, roles);
 
-        ClaudeResumeTailor claudeResumeTailor = new ClaudeResumeTailor(EnvLoader.require("ANTHROPIC_API_KEY"));
+        String anthropicApiKey = EnvLoader.require("ANTHROPIC_API_KEY");
+        ClaudeResumeTailor claudeResumeTailor = new ClaudeResumeTailor(anthropicApiKey);
         ResumeTailoringService resumeTailoringService = new ResumeTailoringService(
                 baseResumePath, Path.of("data", "tailored-resumes"), claudeResumeTailor, new TectonicCompiler(),
                 tailoredResumeRepository);
 
+        ClaudeCoverLetterWriter claudeCoverLetterWriter = new ClaudeCoverLetterWriter(anthropicApiKey);
+        CoverLetterGenerationService coverLetterGenerationService = new CoverLetterGenerationService(
+                Path.of("resources", "base_cover_letter.tex"), Path.of("data", "cover-letters"),
+                claudeCoverLetterWriter, new TectonicCompiler(), coverLetterRepository);
+
         return new JobPipeline(roles, blocklist, jobRepository, fetchService, apiCallRepository,
-                eligibilityExclusionRepository, scoringEngine, resumeTailoringService);
+                eligibilityExclusionRepository, scoringEngine, resumeTailoringService, coverLetterGenerationService);
     }
 }

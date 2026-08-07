@@ -2,6 +2,8 @@ package com.jobhuntcopilot.pipeline;
 
 import com.jobhuntcopilot.config.BlocklistConfig;
 import com.jobhuntcopilot.config.RolesConfig;
+import com.jobhuntcopilot.coverletter.CoverLetterGenerationService;
+import com.jobhuntcopilot.coverletter.CoverLetterView;
 import com.jobhuntcopilot.db.ApiCallRepository;
 import com.jobhuntcopilot.db.EligibilityExclusionRepository;
 import com.jobhuntcopilot.db.JobRepository;
@@ -40,6 +42,7 @@ public class JobPipeline {
     private final ScoringEngine scoringEngine;
     private final EligibilityFilter eligibilityFilter;
     private final ResumeTailoringService resumeTailoringService;
+    private final CoverLetterGenerationService coverLetterGenerationService;
 
     public JobPipeline(
             RolesConfig rolesConfig,
@@ -49,7 +52,8 @@ public class JobPipeline {
             ApiCallRepository apiCallRepository,
             EligibilityExclusionRepository eligibilityExclusionRepository,
             ScoringEngine scoringEngine,
-            ResumeTailoringService resumeTailoringService) {
+            ResumeTailoringService resumeTailoringService,
+            CoverLetterGenerationService coverLetterGenerationService) {
         this.rolesConfig = rolesConfig;
         this.blocklistConfig = blocklistConfig;
         this.jobRepository = jobRepository;
@@ -59,6 +63,7 @@ public class JobPipeline {
         this.scoringEngine = scoringEngine;
         this.eligibilityFilter = new EligibilityFilter(rolesConfig.eligibility());
         this.resumeTailoringService = resumeTailoringService;
+        this.coverLetterGenerationService = coverLetterGenerationService;
     }
 
     /**
@@ -119,6 +124,15 @@ public class JobPipeline {
      */
     public TailoredResumeView tailorResume(Job job) throws SQLException {
         return resumeTailoringService.tailor(job);
+    }
+
+    /**
+     * Generates (or returns the cached) tailored cover letter for this posting — only called when
+     * the detail view's "Generate Cover Letter" button is clicked, never for every fetched posting,
+     * since it costs a real Claude API call and a LaTeX compile.
+     */
+    public CoverLetterView generateCoverLetter(Job job) throws SQLException {
+        return coverLetterGenerationService.generate(job);
     }
 
     public int apiCallsInLast24Hours() throws SQLException {

@@ -8,9 +8,9 @@ Built as a personal project to solve my own job search and to learn Java/softwar
 
 Job hunting means the same repetitive loop over and over: search several job boards for the same handful of role titles, skim postings to see if they're worth a look, hand-tailor a resume for the ones that are, then fill out the same eligibility/demographic questions on a slightly different form each time. This app automates the tedious, mechanical parts of that loop (searching, scoring, tailoring, form-filling) while keeping a human in the loop for every judgment call — nothing gets submitted without me reading it first.
 
-## Current status: Phase 6 — Resume tailoring (Claude API + LaTeX → PDF)
+## Current status: Phase 7 — Cover letter generation (Claude API + LaTeX → PDF)
 
-The detail view now has a **Tailor Resume for This Posting** button. Clicking it sends only the *editable* content of `base_resume.tex` (Experience and Technical Projects bullets) to Claude Opus 4.5 along with the posting's title/company/description, asks it to reorder and reword bullets to surface keywords from the posting, reassembles the result into valid LaTeX, compiles it to PDF via Tectonic, and shows a diff/summary of every change (reworded, reordered, dropped) next to a button that opens the compiled PDF. See [Resume tailoring](#resume-tailoring) below for how the no-fabrication guarantees actually work.
+The detail view now also has a **Generate Cover Letter for This Posting** button, alongside Phase 6's resume tailoring. It runs the same Claude-powered, no-fabrication pipeline — parse the base LaTeX, ask Claude to reorder/reword/drop *paragraphs* (not bullets) to surface keywords from the posting, reassemble, compile to PDF via Tectonic, cache per posting, and show a diff before the PDF is used. See [Cover letter generation](#cover-letter-generation) below for what's different from resume tailoring and why.
 
 ![Job Hunt Copilot list view](docs/phase5-list-view.png)
 ![Job Hunt Copilot detail view](docs/phase5-detail-view.png)
@@ -22,8 +22,8 @@ The detail view now has a **Tailor Resume for This Posting** button. Clicking it
 - **Local storage:** SQLite via JDBC (`org.xerial:sqlite-jdbc`)
 - **Config parsing:** Gson (reads `config/roles.json` and `config/blocklist.json`)
 - **HTTP:** `java.net.http.HttpClient` (built into the JDK, no extra dependency)
-- **Resume tailoring:** Claude API (Anthropic), official `com.anthropic:anthropic-java` SDK, model `claude-opus-4-5`
-- **Resume format:** LaTeX (`.tex`) compiled to PDF via [Tectonic](https://tectonic-typesetting.github.io/)
+- **Resume tailoring & cover letter generation:** Claude API (Anthropic), official `com.anthropic:anthropic-java` SDK, model `claude-opus-4-5`
+- **Resume/cover letter format:** LaTeX (`.tex`) compiled to PDF via [Tectonic](https://tectonic-typesetting.github.io/)
 - **Browser automation for applying:** Selenium WebDriver, Selenium Manager for driver binaries (Phase 8+)
 - **Build tool:** Maven
 
@@ -76,7 +76,7 @@ Opening a posting (from the list) swaps to a full detail view in the same window
 
 Opening the detail view advances a NEW posting to VIEWED (never overwrites APPLIED or DISMISSED) — `JobPipeline.markViewed()`, called before the view is even constructed, so the view itself stays free of that side effect.
 
-No Apply button yet. The original design calls for one here, but it needs a cover letter (Phase 7) too, to actually attach alongside the tailored resume — a button that opens nothing isn't worth having yet.
+No Apply button yet. The original design calls for one here, but that's Phase 8's semi-automated apply flow — a button that opens nothing isn't worth having yet.
 
 ## Resume tailoring
 
@@ -89,6 +89,18 @@ Clicking **Tailor Resume for This Posting** (only for postings actually opened i
 5. **Cache** the result per posting (`tailored_resumes` table) so reopening the same posting's detail view doesn't re-call Claude.
 6. **Show a diff** — every reworded, reordered, or dropped bullet/project, with Claude's stated reason, right next to a button that opens the compiled PDF — so nothing gets used without being checked first. A lightweight heuristic (`FabricationHeuristic`) also flags any number (count, percentage, dollar amount) that appears in a reworded bullet but wasn't in the original, as an extra signal to double-check before trusting a rewording.
 
+## Cover letter generation
+
+Clicking **Generate Cover Letter for This Posting** runs the same shape of pipeline as resume tailoring, reusing the same Claude API key, `TectonicCompiler`, and `PdfPageCounter` — but the unit of content is a *paragraph*, not a *bullet*, since a cover letter is prose rather than a bulleted list:
+
+1. **Parse** `base_cover_letter.tex` (`CoverLetterParser`) into an opening paragraph, a list of headed body paragraphs (e.g. "Technical Impact and Systems Development"), and a closing paragraph — everything else (name/contact header, salutation, signature block, and every body paragraph's `\textbf{...}` heading) is captured and passed through byte-for-byte, untouched.
+2. **Ask Claude** (`ClaudeCoverLetterWriter`, model `claude-opus-4-5`) to reword the opening/closing for keyword alignment, and to reorder, reword, and optionally drop *one* body paragraph to prioritize whatever's most relevant to the posting. Claude never sees the header/salutation/signature block, and — same as resume tailoring — never sees LaTeX: paragraph text is unescaped to plain text before it's sent and re-escaped after, so a rewording can't corrupt a `\&`/`\%`/`\$` escape sequence.
+3. **Validate** the response the same way: every paragraph ID (opening, each body paragraph, closing) must be explicitly accounted for, opening/closing can never be dropped or reordered away from first/last, and at least one body paragraph must survive.
+4. **Reassemble** (`CoverLetterAssembler`) and **compile** to PDF via Tectonic, dropping the lowest-priority body paragraph and recompiling (bounded attempts) if it overflows to a second page — same trim-and-retry pattern as resume tailoring.
+5. **Cache** per posting (`cover_letters` table) and **show a diff**, same as resume tailoring — reworded/reordered/dropped paragraphs with Claude's stated reason, plus the same `FabricationHeuristic` new-number check, next to a button that opens the compiled PDF.
+
+`resources/base_cover_letter.tex` is my actual cover letter, not a placeholder — every fact in it (degree, certification, scholar program, employers, projects) is real, same trust boundary as `base_resume.tex`: Claude may re-emphasize and reorder what's already there, never add to it.
+
 ## Project layout
 
 ```
@@ -97,7 +109,8 @@ job-hunt-copilot/
 │   ├── roles.json                   # Search terms, location/remote pref, recency rule, scoring weights
 │   └── blocklist.json               # Companies to filter out before scoring
 ├── resources/
-│   └── base_resume.tex              # My base LaTeX resume — source of truth for all tailored versions
+│   ├── base_resume.tex              # My base LaTeX resume — source of truth for all tailored versions
+│   └── base_cover_letter.tex        # My base LaTeX cover letter — source of truth for all tailored versions
 ├── docs/
 │   └── *.png                        # Screenshots used in this README
 ├── src/
@@ -113,23 +126,24 @@ job-hunt-copilot/
 │   │   │   ├── score/                # KeywordMatcher, *Scorer classes, ScoringEngine, ScoreBreakdown
 │   │   │   ├── eligibility/          # SeniorityTitleFilter, ExperienceRequirementParser, ClearanceFilter
 │   │   │   ├── tailor/              # ClaudeResumeTailor, ResumeTailoringService, TectonicCompiler, PdfPageCounter, FabricationHeuristic
-│   │   │   ├── pipeline/            # JobPipeline — non-UI fetch/score/dismiss/tailor orchestration
+│   │   │   ├── coverletter/         # CoverLetterParser, CoverLetterAssembler, ClaudeCoverLetterWriter, CoverLetterGenerationService
+│   │   │   ├── pipeline/            # JobPipeline — non-UI fetch/score/dismiss/tailor/cover-letter orchestration
 │   │   │   └── gui/                 # MainView (navigation), JobListView, JobDetailView, shared formatting
 │   │   └── resources/
-│   │       └── schema.sql           # SQLite DDL: jobs, api_calls, eligibility_exclusions, tailored_resumes tables
+│   │       └── schema.sql           # SQLite DDL: jobs, api_calls, eligibility_exclusions, tailored_resumes, cover_letters tables
 │   └── test/java/com/jobhuntcopilot/   # Mirrors main/ — one test class per component above
 ├── .env.example                     # Template for API keys — copy to .env and fill in (gitignored)
 ├── .gitignore
 └── pom.xml
 ```
 
-`data/jobhunt.db` (the actual SQLite file) and `data/tailored-resumes/` (compiled tailored-resume PDFs) are created on first run and gitignored — local runtime state, not source.
+`data/jobhunt.db` (the actual SQLite file), `data/tailored-resumes/` (compiled tailored-resume PDFs), and `data/cover-letters/` (compiled cover-letter PDFs) are created on first run and gitignored — local runtime state, not source.
 
 ## How to run it locally
 
-Requires Java 17+, Maven, and [Tectonic](https://tectonic-typesetting.github.io/) on `PATH` (for resume tailoring — `brew install tectonic` on macOS).
+Requires Java 17+, Maven, and [Tectonic](https://tectonic-typesetting.github.io/) on `PATH` (for resume tailoring and cover letter generation — `brew install tectonic` on macOS).
 
-1. Copy `.env.example` to `.env` and fill in `ADZUNA_APP_ID` / `ADZUNA_APP_KEY` (free from [developer.adzuna.com](https://developer.adzuna.com/)) and `ANTHROPIC_API_KEY` (from [console.anthropic.com](https://console.anthropic.com/)) for resume tailoring.
+1. Copy `.env.example` to `.env` and fill in `ADZUNA_APP_ID` / `ADZUNA_APP_KEY` (free from [developer.adzuna.com](https://developer.adzuna.com/)) and `ANTHROPIC_API_KEY` (from [console.anthropic.com](https://console.anthropic.com/)) for resume tailoring and cover letter generation.
 2. Run it:
 
 ```bash
@@ -152,10 +166,18 @@ The window opens showing whatever's already in `data/jobhunt.db` (instant, no ne
 - [x] **Phase 4** — GUI list view
 - [x] **Phase 5** — GUI detail view
 - [x] **Phase 6** — Resume tailoring (Claude API + LaTeX→PDF)
-- [ ] **Phase 7** — Cover letter generation
+- [x] **Phase 7** — Cover letter generation
 - [ ] **Phase 8** — Semi-automated apply flow (Greenhouse/Lever first)
 - [ ] **Phase 9** — Application history + CSV export
 - [ ] **Phase 10** — Polish: error handling, more tests, screenshots, demo GIF
+
+## What I learned — Phase 7
+
+This phase was mostly a story of a Phase 6 lesson paying for itself: before writing any cover-letter-specific code, I compiled the newly-added `base_cover_letter.tex` through Tectonic first, exactly the way *not* doing that up front for `base_resume.tex` had cost time in Phase 6. It compiled clean on the first try (aside from two harmless FontAwesome ToUnicode-CMap warnings), so this phase never hit a LaTeX-engine-incompatibility bug at all — a direct payoff of testing the untested piece before building on top of it, rather than a stroke of luck.
+
+The main design decision was choosing the atomic unit of tailoring. Resume tailoring operates on bullets nested inside entries; a cover letter is prose, so the natural unit is a paragraph, not a sentence or a bullet. That meant re-deriving the "Claude can't touch what it can't see" guarantee at a different granularity: the header/contact block, salutation, and signature block are captured verbatim and never sent to Claude at all (same as resume entry headers), and — new for this phase — the opening and closing paragraphs are sent to Claude for *rewording only*, with their first/last position enforced by `CoverLetterAssembler`'s shape rather than trusted to whatever order Claude's response happens to list them in. Only the headed body paragraphs in between are eligible for reordering or a single drop. That fixed/flexible split is what let the same "every ID must be explicitly accounted for" validation pattern from `ClaudeResumeTailor` carry over almost unchanged to `ClaudeCoverLetterWriter`.
+
+The rest of the pipeline — `TectonicCompiler`, `PdfPageCounter`, `FabricationHeuristic` — was reused from the `tailor` package without a single change, which is a decent sign that Phase 6 built those as genuinely resume-agnostic infrastructure rather than something that happened to work for one document. Live verification against a real "Solutions Engineer" posting showed the design goal working as intended: Claude moved the "Professional Experience and Security Expertise" paragraph to the front (most relevant to a technical, client-facing role), reworded several paragraphs to surface Python/Azure DevOps/troubleshooting language actually already present in the letter, and — notably — deprioritized (but didn't delete or falsify) the CompTIA Security+ mention in the opening for a role that didn't call for it. Nothing was invented; the compiled PDF held at one page without needing the auto-trim fallback; and the second call against the same posting correctly hit the cache instead of calling Claude again.
 
 ## What I learned — Phase 6
 

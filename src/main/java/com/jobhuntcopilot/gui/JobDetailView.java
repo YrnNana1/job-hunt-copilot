@@ -1,5 +1,7 @@
 package com.jobhuntcopilot.gui;
 
+import com.jobhuntcopilot.coverletter.CoverLetterChange;
+import com.jobhuntcopilot.coverletter.CoverLetterView;
 import com.jobhuntcopilot.model.Job;
 import com.jobhuntcopilot.pipeline.JobPipeline;
 import com.jobhuntcopilot.score.ScoreFactor;
@@ -26,11 +28,12 @@ import java.util.List;
 /**
  * Full detail for a single posting: metadata, the complete per-factor score
  * breakdown (the list view only shows the total), the full description,
- * Claude-powered resume tailoring (Phase 6), and actions (open the original
- * posting, dismiss). Opening this view marks a NEW posting VIEWED — see
- * MainView, which calls JobPipeline.markViewed before constructing this.
+ * Claude-powered resume tailoring (Phase 6) and cover letter generation
+ * (Phase 7), and actions (open the original posting, dismiss). Opening this
+ * view marks a NEW posting VIEWED — see MainView, which calls
+ * JobPipeline.markViewed before constructing this.
  *
- * No Apply button yet — that needs a cover letter (Phase 7) too, and a
+ * No Apply button yet — that's Phase 8's semi-automated apply flow, and a
  * half-wired button that opens nothing isn't worth having yet.
  */
 public class JobDetailView extends BorderPane {
@@ -45,6 +48,11 @@ public class JobDetailView extends BorderPane {
     private final Button openTailoredResumeButton = new Button("Open Tailored Resume PDF");
     private final VBox tailoredResumeChangesBox = new VBox(6);
     private Path tailoredResumePdfPath;
+    private final Label coverLetterStatusLabel = new Label();
+    private final Button generateCoverLetterButton = new Button("Generate Cover Letter for This Posting");
+    private final Button openCoverLetterButton = new Button("Open Cover Letter PDF");
+    private final VBox coverLetterChangesBox = new VBox(6);
+    private Path coverLetterPdfPath;
 
     public JobDetailView(JobPipeline pipeline, ScoredJob scoredJob, HostServices hostServices, Runnable onBack) {
         this.pipeline = pipeline;
@@ -91,6 +99,8 @@ public class JobDetailView extends BorderPane {
                 buildDescriptionSection(),
                 new Separator(),
                 buildTailoredResumeSection(),
+                new Separator(),
+                buildCoverLetterSection(),
                 buildActionsRow(),
                 statusMessageLabel);
 
@@ -270,6 +280,120 @@ public class JobDetailView extends BorderPane {
             case ENTRY_DROPPED -> change.section() + " — dropped \"" + change.entryLabel() + "\" entirely";
             case ENTRY_REORDERED -> change.section() + " — moved \"" + change.entryLabel() + "\"";
         };
+    }
+
+    private Node buildCoverLetterSection() {
+        Label heading = new Label("Cover Letter");
+        heading.setStyle("-fx-font-size: 15px; -fx-font-weight: bold;");
+
+        Label helpText = new Label("Uses Claude to reorder and reword real cover letter paragraphs to surface "
+                + "keywords from this posting — it never adds anything that isn't already in the base cover "
+                + "letter. Review the changes below before using the PDF.");
+        helpText.setWrapText(true);
+        helpText.setStyle("-fx-font-size: 11px; -fx-text-fill: #888;");
+
+        generateCoverLetterButton.setOnAction(event -> onGenerateCoverLetter());
+        openCoverLetterButton.setDisable(true);
+        openCoverLetterButton.setOnAction(event -> {
+            if (coverLetterPdfPath != null) {
+                hostServices.showDocument(coverLetterPdfPath.toUri().toString());
+            }
+        });
+        HBox actions = new HBox(10, generateCoverLetterButton, openCoverLetterButton);
+        actions.setAlignment(Pos.CENTER_LEFT);
+
+        return new VBox(8, heading, helpText, actions, coverLetterStatusLabel, coverLetterChangesBox);
+    }
+
+    private void onGenerateCoverLetter() {
+        generateCoverLetterButton.setDisable(true);
+        coverLetterStatusLabel.setText(
+                "Asking Claude to tailor the cover letter and compiling to PDF — this can take a bit...");
+        coverLetterChangesBox.getChildren().clear();
+
+        Task<CoverLetterView> task = new Task<>() {
+            @Override
+            protected CoverLetterView call() throws SQLException {
+                return pipeline.generateCoverLetter(scoredJob.job());
+            }
+        };
+        task.setOnSucceeded(event -> onCoverLetterReady(task.getValue()));
+        task.setOnFailed(event -> {
+            Throwable error = task.getException();
+            coverLetterStatusLabel.setText(
+                    "Failed to generate cover letter: " + (error == null ? "unknown error" : error.getMessage()));
+            generateCoverLetterButton.setDisable(false);
+        });
+
+        Thread coverLetterThread = new Thread(task, "cover-letter-generate");
+        coverLetterThread.setDaemon(true);
+        coverLetterThread.start();
+    }
+
+    private void onCoverLetterReady(CoverLetterView view) {
+        coverLetterPdfPath = view.pdfPath();
+        openCoverLetterButton.setDisable(false);
+        generateCoverLetterButton.setDisable(false);
+        coverLetterStatusLabel.setText(view.cached()
+                ? "Loaded a previously generated cover letter for this posting — no new Claude call was made."
+                : "Cover letter generated. Review the changes below, then open the PDF.");
+        renderCoverLetterChanges(view.changes());
+    }
+
+    private void renderCoverLetterChanges(List<CoverLetterChange> changes) {
+        coverLetterChangesBox.getChildren().clear();
+        if (changes.isEmpty()) {
+            coverLetterChangesBox.getChildren().add(new Label("No changes — the base cover letter already matched well."));
+            return;
+        }
+        for (CoverLetterChange change : changes) {
+            coverLetterChangesBox.getChildren().add(buildCoverLetterChangeRow(change));
+        }
+    }
+
+    private Node buildCoverLetterChangeRow(CoverLetterChange change) {
+        Label header = new Label(coverLetterChangeSummary(change));
+        header.setWrapText(true);
+        header.setStyle("-fx-font-weight: bold;");
+
+        VBox rows = new VBox(2, header);
+        if (change.reason() != null && !change.reason().isBlank()) {
+            Label reason = new Label("Why: " + change.reason());
+            reason.setWrapText(true);
+            reason.setStyle("-fx-text-fill: #555; -fx-font-size: 12px;");
+            rows.getChildren().add(reason);
+        }
+        if (change.type() == CoverLetterChange.ChangeType.REWORDED) {
+            rows.getChildren().addAll(wrappedLabel("Before: " + change.originalText()),
+                    wrappedLabel("After: " + change.newText()));
+        } else if (change.type() == CoverLetterChange.ChangeType.DROPPED && change.originalText() != null) {
+            rows.getChildren().add(wrappedLabel("Dropped: " + change.originalText()));
+        }
+        if (!change.suspiciousNewNumbers().isEmpty()) {
+            Label warning = new Label("New number(s) not in the original paragraph — verify before using: "
+                    + String.join(", ", change.suspiciousNewNumbers()));
+            warning.setWrapText(true);
+            warning.setStyle("-fx-text-fill: #b00020; -fx-font-size: 12px; -fx-font-weight: bold;");
+            rows.getChildren().add(warning);
+        }
+        rows.setStyle("-fx-padding: 6; -fx-background-color: #f5f5f5; -fx-background-radius: 4;");
+        return rows;
+    }
+
+    private String coverLetterChangeSummary(CoverLetterChange change) {
+        String label = coverLetterParagraphLabel(change);
+        return switch (change.type()) {
+            case REWORDED -> "Reworded " + label;
+            case REORDERED -> "Reordered " + label;
+            case DROPPED -> "Dropped " + label;
+        };
+    }
+
+    private String coverLetterParagraphLabel(CoverLetterChange change) {
+        if (change.heading() != null) {
+            return "\"" + change.heading() + "\" paragraph";
+        }
+        return "opening".equals(change.paragraphId()) ? "the opening paragraph" : "the closing paragraph";
     }
 
     private Node buildActionsRow() {
