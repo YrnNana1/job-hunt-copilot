@@ -1,5 +1,8 @@
 package com.jobhuntcopilot.gui;
 
+import com.jobhuntcopilot.apply.ApplyAttemptView;
+import com.jobhuntcopilot.apply.AtsType;
+import com.jobhuntcopilot.apply.FieldMatch;
 import com.jobhuntcopilot.coverletter.CoverLetterChange;
 import com.jobhuntcopilot.coverletter.CoverLetterView;
 import com.jobhuntcopilot.model.Job;
@@ -28,13 +31,16 @@ import java.util.List;
 /**
  * Full detail for a single posting: metadata, the complete per-factor score
  * breakdown (the list view only shows the total), the full description,
- * Claude-powered resume tailoring (Phase 6) and cover letter generation
- * (Phase 7), and actions (open the original posting, dismiss). Opening this
- * view marks a NEW posting VIEWED — see MainView, which calls
- * JobPipeline.markViewed before constructing this.
+ * Claude-powered resume tailoring (Phase 6), cover letter generation
+ * (Phase 7), and the semi-automated apply flow (Phase 8), plus actions (open
+ * the original posting, dismiss). Opening this view marks a NEW posting
+ * VIEWED — see MainView, which calls JobPipeline.markViewed before
+ * constructing this.
  *
- * No Apply button yet — that's Phase 8's semi-automated apply flow, and a
- * half-wired button that opens nothing isn't worth having yet.
+ * Apply is disabled until both a tailored resume and cover letter exist for
+ * this posting — it never silently triggers those Claude calls itself. It
+ * only ever fills a browser form and shows what it did; the actual Submit
+ * click on the real site is always the user's, in the browser, by hand.
  */
 public class JobDetailView extends BorderPane {
 
@@ -53,6 +59,10 @@ public class JobDetailView extends BorderPane {
     private final Button openCoverLetterButton = new Button("Open Cover Letter PDF");
     private final VBox coverLetterChangesBox = new VBox(6);
     private Path coverLetterPdfPath;
+    private final Label applyStatusLabel = new Label();
+    private final Button applyButton = new Button("Apply");
+    private final VBox applyReviewBox = new VBox(6);
+    private Long applyAttemptId;
 
     public JobDetailView(JobPipeline pipeline, ScoredJob scoredJob, HostServices hostServices, Runnable onBack) {
         this.pipeline = pipeline;
@@ -101,6 +111,8 @@ public class JobDetailView extends BorderPane {
                 buildTailoredResumeSection(),
                 new Separator(),
                 buildCoverLetterSection(),
+                new Separator(),
+                buildApplySection(),
                 buildActionsRow(),
                 statusMessageLabel);
 
@@ -223,6 +235,7 @@ public class JobDetailView extends BorderPane {
                 ? "Loaded a previously tailored resume for this posting — no new Claude call was made."
                 : "Tailored resume generated. Review the changes below, then open the PDF.");
         renderTailoringChanges(view.changes());
+        updateApplyButtonState();
     }
 
     private void renderTailoringChanges(List<TailoringChange> changes) {
@@ -338,6 +351,7 @@ public class JobDetailView extends BorderPane {
                 ? "Loaded a previously generated cover letter for this posting — no new Claude call was made."
                 : "Cover letter generated. Review the changes below, then open the PDF.");
         renderCoverLetterChanges(view.changes());
+        updateApplyButtonState();
     }
 
     private void renderCoverLetterChanges(List<CoverLetterChange> changes) {
@@ -394,6 +408,121 @@ public class JobDetailView extends BorderPane {
             return "\"" + change.heading() + "\" paragraph";
         }
         return "opening".equals(change.paragraphId()) ? "the opening paragraph" : "the closing paragraph";
+    }
+
+    private Node buildApplySection() {
+        Label heading = new Label("Apply");
+        heading.setStyle("-fx-font-size: 15px; -fx-font-weight: bold;");
+
+        Label helpText = new Label("Launches a real browser, navigates to the posting, and — for Greenhouse or Lever "
+                + "application forms — fills in what it recognizes from your profile, uploading the tailored resume "
+                + "and cover letter. It never clicks Submit: you review everything below, then submit yourself in "
+                + "the browser. Requires a tailored resume and cover letter for this posting first.");
+        helpText.setWrapText(true);
+        helpText.setStyle("-fx-font-size: 11px; -fx-text-fill: #888;");
+
+        applyButton.setDisable(true);
+        applyButton.setOnAction(event -> onApply());
+
+        return new VBox(8, heading, helpText, applyButton, applyStatusLabel, applyReviewBox);
+    }
+
+    private void updateApplyButtonState() {
+        applyButton.setDisable(tailoredResumePdfPath == null || coverLetterPdfPath == null);
+    }
+
+    private void onApply() {
+        applyButton.setDisable(true);
+        applyStatusLabel.setText("Launching a browser and filling the form — this can take a bit...");
+        applyReviewBox.getChildren().clear();
+        applyAttemptId = null;
+
+        Task<ApplyAttemptView> task = new Task<>() {
+            @Override
+            protected ApplyAttemptView call() throws SQLException {
+                return pipeline.startApply(scoredJob.job(), tailoredResumePdfPath, coverLetterPdfPath);
+            }
+        };
+        task.setOnSucceeded(event -> onApplyReady(task.getValue()));
+        task.setOnFailed(event -> {
+            Throwable error = task.getException();
+            applyStatusLabel.setText("Failed to prepare application: " + (error == null ? "unknown error" : error.getMessage()));
+            applyButton.setDisable(false);
+        });
+
+        Thread applyThread = new Thread(task, "apply-flow");
+        applyThread.setDaemon(true);
+        applyThread.start();
+    }
+
+    private void onApplyReady(ApplyAttemptView view) {
+        applyAttemptId = view.attemptId();
+        applyButton.setDisable(false);
+        applyReviewBox.getChildren().clear();
+
+        if (view.atsType() == AtsType.UNKNOWN) {
+            applyStatusLabel.setText("This posting's application system isn't Greenhouse or Lever yet — "
+                    + "a browser tab was opened to the posting. Please apply manually there.");
+            return;
+        }
+
+        applyStatusLabel.setText("Form filled in the browser (" + view.atsType() + "). Review every field below, "
+                + "then go submit it yourself in the browser.");
+        for (FieldMatch match : view.matches()) {
+            applyReviewBox.getChildren().add(buildApplyFieldRow(match));
+        }
+        applyReviewBox.getChildren().add(buildApplyOutcomeRow());
+    }
+
+    private Node buildApplyFieldRow(FieldMatch match) {
+        Label header = new Label(match.field().labelText());
+        header.setWrapText(true);
+        header.setStyle("-fx-font-weight: bold;");
+
+        VBox rows = new VBox(2, header);
+        if (match.flagged()) {
+            Label warning = new Label("Left blank — " + match.flagReason());
+            warning.setWrapText(true);
+            warning.setStyle("-fx-text-fill: #b00020; -fx-font-size: 12px; -fx-font-weight: bold;");
+            rows.getChildren().add(warning);
+        } else {
+            String shown = match.resolvedOptionText() != null ? match.resolvedOptionText() : match.resolvedValue();
+            Label value = new Label("Filled: " + shown + "  (" + match.source() + ")");
+            value.setWrapText(true);
+            value.setStyle("-fx-font-size: 12px;");
+            rows.getChildren().add(value);
+        }
+        rows.setStyle("-fx-padding: 6; -fx-background-color: #f5f5f5; -fx-background-radius: 4;");
+        return rows;
+    }
+
+    private Node buildApplyOutcomeRow() {
+        Button submittedButton = new Button("I Submitted It");
+        Button notSubmittedButton = new Button("I Didn't Submit It");
+        Label outcomeLabel = new Label();
+
+        submittedButton.setOnAction(event -> onRecordApplyOutcome(true, submittedButton, notSubmittedButton, outcomeLabel));
+        notSubmittedButton.setOnAction(event -> onRecordApplyOutcome(false, submittedButton, notSubmittedButton, outcomeLabel));
+
+        HBox buttons = new HBox(10, submittedButton, notSubmittedButton);
+        buttons.setAlignment(Pos.CENTER_LEFT);
+        return new VBox(6, buttons, outcomeLabel);
+    }
+
+    private void onRecordApplyOutcome(boolean submitted, Button submittedButton, Button notSubmittedButton, Label outcomeLabel) {
+        if (applyAttemptId == null) {
+            return;
+        }
+        try {
+            pipeline.recordApplyOutcome(applyAttemptId, scoredJob.job(), submitted);
+            submittedButton.setDisable(true);
+            notSubmittedButton.setDisable(true);
+            outcomeLabel.setText(submitted
+                    ? "Marked as Applied."
+                    : "Marked as not submitted — click Apply again whenever you're ready to retry.");
+        } catch (SQLException e) {
+            outcomeLabel.setText("Failed to record outcome: " + e.getMessage());
+        }
     }
 
     private Node buildActionsRow() {

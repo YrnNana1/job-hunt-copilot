@@ -1,0 +1,22 @@
+{
+  "personal": {
+    "fullName": "Jane Example",
+    "firstName": "Jane",
+    "lastName": "Example",
+    "email": "jane.example@example.com",
+    "phone": "(555) 555-5555",
+    "linkedInUrl": "https://linkedin.com/in/jane-example",
+    "websiteUrl": "https://jane-example.dev",
+    "location": "Remote, USA"
+  },
+  "workAuthorization": {
+    "authorizedToWorkInUs": true,
+    "requiresSponsorshipNow": false,
+    "requiresSponsorshipFuture": false
+  },
+  "eeo": {
+    "disabilityStatus": "DECLINE_TO_ANSWER",
+    "veteranStatus": "DECLINE_TO_ANSWER",
+    "raceEthnicity": "DECLINE_TO_ANSWER"
+  }
+}

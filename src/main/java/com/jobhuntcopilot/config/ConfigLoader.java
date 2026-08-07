@@ -13,6 +13,7 @@ public class ConfigLoader {
 
     public static final Path DEFAULT_ROLES_CONFIG_PATH = Path.of("config", "roles.json");
     public static final Path DEFAULT_BLOCKLIST_CONFIG_PATH = Path.of("config", "blocklist.json");
+    public static final Path DEFAULT_PROFILE_CONFIG_PATH = Path.of("config", "profile.json");
 
     private static final Gson GSON = new Gson();
 
@@ -30,6 +31,14 @@ public class ConfigLoader {
 
     public static BlocklistConfig loadBlocklistConfig(Path path) {
         return load(path, BlocklistConfig.class);
+    }
+
+    public static ProfileConfig loadProfileConfig() {
+        return loadProfileConfig(DEFAULT_PROFILE_CONFIG_PATH);
+    }
+
+    public static ProfileConfig loadProfileConfig(Path path) {
+        return load(path, ProfileConfig.class);
     }
 
     private static <T> T load(Path path, Class<T> type) {

@@ -96,3 +96,21 @@ CREATE TABLE IF NOT EXISTS cover_letters (
     generated_at TEXT NOT NULL,
     UNIQUE (job_id)
 );
+
+-- One row per Apply button click (Phase 8) - not unique per job_id, since a user may retry after
+-- NOT_SUBMITTED. fields_json holds the full per-field diagnostic list (label, match source,
+-- resolved value or blank, flagged + reason) so an attempt can be debugged without re-running
+-- Selenium blind. The app never observes a real submission on an external site, so outcome starts
+-- at PREPARED (or UNSUPPORTED_ATS/FAILED) and is only ever moved to SUBMITTED/NOT_SUBMITTED by an
+-- explicit user confirmation on the review screen.
+CREATE TABLE IF NOT EXISTS apply_attempts (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id       INTEGER NOT NULL REFERENCES jobs(id),
+    ats_type     TEXT NOT NULL,
+    url          TEXT NOT NULL,
+    fields_json  TEXT NOT NULL,
+    outcome      TEXT NOT NULL CHECK (outcome IN
+                     ('PREPARED', 'SUBMITTED', 'NOT_SUBMITTED', 'UNSUPPORTED_ATS', 'FAILED')),
+    started_at   TEXT NOT NULL,
+    finished_at  TEXT
+);

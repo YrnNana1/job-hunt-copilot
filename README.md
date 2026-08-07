@@ -8,9 +8,9 @@ Built as a personal project to solve my own job search and to learn Java/softwar
 
 Job hunting means the same repetitive loop over and over: search several job boards for the same handful of role titles, skim postings to see if they're worth a look, hand-tailor a resume for the ones that are, then fill out the same eligibility/demographic questions on a slightly different form each time. This app automates the tedious, mechanical parts of that loop (searching, scoring, tailoring, form-filling) while keeping a human in the loop for every judgment call — nothing gets submitted without me reading it first.
 
-## Current status: Phase 7 — Cover letter generation (Claude API + LaTeX → PDF)
+## Current status: Phase 8 — Semi-automated apply flow (Greenhouse/Lever)
 
-The detail view now also has a **Generate Cover Letter for This Posting** button, alongside Phase 6's resume tailoring. It runs the same Claude-powered, no-fabrication pipeline — parse the base LaTeX, ask Claude to reorder/reword/drop *paragraphs* (not bullets) to surface keywords from the posting, reassemble, compile to PDF via Tectonic, cache per posting, and show a diff before the PDF is used. See [Cover letter generation](#cover-letter-generation) below for what's different from resume tailoring and why.
+The detail view now has an **Apply** button, gated on a tailored resume and cover letter already existing for the posting. Clicking it launches a real, visible browser via Selenium, navigates to the posting, detects whether it's a Greenhouse or Lever application form, and fills in whatever it can confidently recognize from `config/profile.json` — uploading the tailored resume/cover letter along the way. It never clicks Submit. Every field it filled (or deliberately left blank) shows up on a review screen before anything else happens, and the actual submission is always a human clicking the real Submit button in the browser. See [Semi-automated apply flow](#semi-automated-apply-flow) below for the field-recognition strategy and the no-fabrication guarantees.
 
 ![Job Hunt Copilot list view](docs/phase5-list-view.png)
 ![Job Hunt Copilot detail view](docs/phase5-detail-view.png)
@@ -24,7 +24,7 @@ The detail view now also has a **Generate Cover Letter for This Posting** button
 - **HTTP:** `java.net.http.HttpClient` (built into the JDK, no extra dependency)
 - **Resume tailoring & cover letter generation:** Claude API (Anthropic), official `com.anthropic:anthropic-java` SDK, model `claude-opus-4-5`
 - **Resume/cover letter format:** LaTeX (`.tex`) compiled to PDF via [Tectonic](https://tectonic-typesetting.github.io/)
-- **Browser automation for applying:** Selenium WebDriver, Selenium Manager for driver binaries (Phase 8+)
+- **Browser automation for applying:** Selenium WebDriver (`org.seleniumhq.selenium:selenium-java`), Selenium Manager for driver binaries, Chrome
 - **Build tool:** Maven
 
 ## Job data sources
@@ -76,7 +76,7 @@ Opening a posting (from the list) swaps to a full detail view in the same window
 
 Opening the detail view advances a NEW posting to VIEWED (never overwrites APPLIED or DISMISSED) — `JobPipeline.markViewed()`, called before the view is even constructed, so the view itself stays free of that side effect.
 
-No Apply button yet. The original design calls for one here, but that's Phase 8's semi-automated apply flow — a button that opens nothing isn't worth having yet.
+**Apply** (Phase 8) launches the semi-automated apply flow — see [Semi-automated apply flow](#semi-automated-apply-flow) below. It's disabled until a tailored resume and cover letter both exist for this posting.
 
 ## Resume tailoring
 
@@ -101,13 +101,31 @@ Clicking **Generate Cover Letter for This Posting** runs the same shape of pipel
 
 `resources/base_cover_letter.tex` is my actual cover letter, not a placeholder — every fact in it (degree, certification, scholar program, employers, projects) is real, same trust boundary as `base_resume.tex`: Claude may re-emphasize and reorder what's already there, never add to it.
 
+## Semi-automated apply flow
+
+Clicking **Apply** (only enabled once a tailored resume and cover letter already exist for this posting — clicking Apply never silently triggers those Claude calls itself) runs this pipeline:
+
+1. **Launch a visible browser** (`ApplyFlowService`, via Selenium/ChromeDriver — not headless, so I can see exactly what's happening) and navigate to the posting's URL.
+2. **Detect the ATS** (`AtsDetector`) from the loaded page's URL and DOM — Greenhouse or Lever only for now, per the roadmap. Anything else is `UNKNOWN`: the browser stays open on the page, but nothing gets auto-filled — I apply manually there.
+3. **Scan the form** (`GreenhouseFormScanner`/`LeverFormScanner`) into a flat list of fields — label text, input type, and (for selects/radios) the literal option text on *this* form, since EEO option wording varies slightly by posting.
+4. **Resolve every field** (`FieldMatcher`, then `ClaudeFieldInterpreter` as fallback) against `config/profile.json` — the exact two-pass strategy: keyword/pattern matching first (name, email, work authorization, EEO category questions, resume/cover-letter file uploads, matched against this form's real option wording via synonym patterns), and Claude only for label wording the patterns don't recognize. Claude is only ever allowed to pick from the enumerated list of my real profile answers it's given — it can't author new answer text, and it's never asked to compose a response to an open-ended question. **Any field neither pass can confidently resolve is left blank and flagged** — this is the same rule for every field, but it matters most for EEO/demographic ones, where a wrong guess is worse than a blank.
+5. **Fill the live browser** (`ApplicationFormFiller`) with everything resolved, uploading the tailored resume/cover letter PDFs to their file inputs. This class has no method that locates or clicks anything resembling a Submit control — that's a deliberate omission in the code, not a runtime check, the same "guardrail via structure" pattern the resume/cover-letter Claude integrations use for entry headers.
+6. **Log the attempt** (`apply_attempts` table via `ApplyAttemptRepository`) — ATS type, URL, every field found/filled/flagged as JSON, and an outcome that starts at `PREPARED` (or `UNSUPPORTED_ATS`/`FAILED`).
+7. **Show the review screen** — every field, its filled value (or why it was left blank), before anything else is possible. Only from there do **"I Submitted It"** / **"I Didn't Submit It"** buttons appear, which is how the app ever finds out what happened — it can't observe a real submission on an external site itself. `ApplyFlowService` never calls `driver.quit()` on any path, so the browser stays open and under my control from the moment it launches; the only way an application is actually submitted is me clicking the real Submit button myself.
+
+`config/profile.json` (gitignored, real personal data — see `config/profile.example.json` for the shape) holds the answers: name/contact info, work authorization, and voluntary EEO self-identification (disability, veteran, race/ethnicity). Any category left out of the file (I didn't configure a gender-identity answer) is treated as unconfigured, not guessed — a form field for it goes through the same blank-and-flag path as any other unrecognized field.
+
+**Not yet live-tested against a real posting.** Everything above is unit/integration-tested without touching a browser or a live site (see `ApplyFlowServiceTest`, which fakes only the one Selenium-touching method). The Greenhouse/Lever DOM selectors are built from documented structure, not verified against a real, current page — that's a deliberate next step done together on one real, low-stakes posting before this touches anything I actually care about, not something to silently "live-verify" solo the way the Claude-only phases were.
+
 ## Project layout
 
 ```
 job-hunt-copilot/
 ├── config/
 │   ├── roles.json                   # Search terms, location/remote pref, recency rule, scoring weights
-│   └── blocklist.json               # Companies to filter out before scoring
+│   ├── blocklist.json               # Companies to filter out before scoring
+│   ├── profile.example.json         # Documents the shape of profile.json — copy and fill in
+│   └── profile.json                 # My real personal/EEO answers for form-filling (gitignored)
 ├── resources/
 │   ├── base_resume.tex              # My base LaTeX resume — source of truth for all tailored versions
 │   └── base_cover_letter.tex        # My base LaTeX cover letter — source of truth for all tailored versions
@@ -127,10 +145,11 @@ job-hunt-copilot/
 │   │   │   ├── eligibility/          # SeniorityTitleFilter, ExperienceRequirementParser, ClearanceFilter
 │   │   │   ├── tailor/              # ClaudeResumeTailor, ResumeTailoringService, TectonicCompiler, PdfPageCounter, FabricationHeuristic
 │   │   │   ├── coverletter/         # CoverLetterParser, CoverLetterAssembler, ClaudeCoverLetterWriter, CoverLetterGenerationService
-│   │   │   ├── pipeline/            # JobPipeline — non-UI fetch/score/dismiss/tailor/cover-letter orchestration
+│   │   │   ├── apply/               # AtsDetector, Greenhouse/LeverFormScanner, FieldMatcher, ClaudeFieldInterpreter, ApplicationFormFiller, ApplyFlowService
+│   │   │   ├── pipeline/            # JobPipeline — non-UI fetch/score/dismiss/tailor/cover-letter/apply orchestration
 │   │   │   └── gui/                 # MainView (navigation), JobListView, JobDetailView, shared formatting
 │   │   └── resources/
-│   │       └── schema.sql           # SQLite DDL: jobs, api_calls, eligibility_exclusions, tailored_resumes, cover_letters tables
+│   │       └── schema.sql           # SQLite DDL: jobs, api_calls, eligibility_exclusions, tailored_resumes, cover_letters, apply_attempts tables
 │   └── test/java/com/jobhuntcopilot/   # Mirrors main/ — one test class per component above
 ├── .env.example                     # Template for API keys — copy to .env and fill in (gitignored)
 ├── .gitignore
@@ -141,10 +160,11 @@ job-hunt-copilot/
 
 ## How to run it locally
 
-Requires Java 17+, Maven, and [Tectonic](https://tectonic-typesetting.github.io/) on `PATH` (for resume tailoring and cover letter generation — `brew install tectonic` on macOS).
+Requires Java 17+, Maven, [Tectonic](https://tectonic-typesetting.github.io/) on `PATH` (for resume tailoring and cover letter generation — `brew install tectonic` on macOS), and Chrome installed (for the apply flow — Selenium Manager resolves the matching driver automatically, no separate install needed).
 
 1. Copy `.env.example` to `.env` and fill in `ADZUNA_APP_ID` / `ADZUNA_APP_KEY` (free from [developer.adzuna.com](https://developer.adzuna.com/)) and `ANTHROPIC_API_KEY` (from [console.anthropic.com](https://console.anthropic.com/)) for resume tailoring and cover letter generation.
-2. Run it:
+2. Copy `config/profile.example.json` to `config/profile.json` and fill in real personal/work-authorization/EEO answers for the apply flow — gitignored, never committed.
+3. Run it:
 
 ```bash
 mvn clean test         # build + run tests (no network calls, no quota used)
@@ -155,7 +175,7 @@ The window opens showing whatever's already in `data/jobhunt.db` (instant, no ne
 
 ### Editing the config
 
-`config/roles.json` and `config/blocklist.json` are meant to be hand-edited as my search evolves — no code changes needed to add a role, tweak a scoring weight, add a preferred metro, adjust the eligibility rules, or block a company.
+`config/roles.json` and `config/blocklist.json` are meant to be hand-edited as my search evolves — no code changes needed to add a role, tweak a scoring weight, add a preferred metro, adjust the eligibility rules, or block a company. `config/profile.json` is edited less often (personal/work-authorization/EEO answers don't change frequently) but follows the same pattern — see `config/profile.example.json` for its shape.
 
 ## Roadmap
 
@@ -170,6 +190,14 @@ The window opens showing whatever's already in `data/jobhunt.db` (instant, no ne
 - [ ] **Phase 8** — Semi-automated apply flow (Greenhouse/Lever first)
 - [ ] **Phase 9** — Application history + CSV export
 - [ ] **Phase 10** — Polish: error handling, more tests, screenshots, demo GIF
+
+## What I learned — Phase 8
+
+This phase is the first one that acts on a real external site instead of just producing a file, and the design choices mostly follow from that shift. The field-recognition strategy (`FieldMatcher`, then `ClaudeFieldInterpreter` as fallback) mirrors the exact "no fabrication" structure from Phases 6/7 applied to a different kind of content: instead of "every returned bullet ID must trace back to a real bullet," it's "every field Claude resolves must come from an enumerated list of my real profile answers I handed it, never text it invents" — and instead of dropping a bullet when unsure, the equivalent move is leaving a field blank and flagging it. Getting the EEO fields right needed one more layer than the resume/cover-letter work did, though: a form's actual option wording ("Black or African American (Not Hispanic or Latino)") varies per posting, so matching against a canonical string never works — `FieldMatcher` resolves my configured answer (an enum) to a *category*, then searches this specific form's real option text for a synonym match, which is the same "match against the real thing in front of you, not an assumption" instinct that drove the EEO synonym patterns in the first place.
+
+The other real design decision was making the one Selenium-touching step swappable for tests, the same way `FakeClaudeResumeTailor`/`FakeClaudeCoverLetterWriter` let Phase 6/7's orchestration tests run without a live API key. `ApplyFlowService.launchAndScan(url)` is the only method that touches a real `ChromeDriver` — everything downstream (field resolution, filling, attempt logging) runs for real in `ApplyFlowServiceTest` against a fake that returns canned scan results, so the "detect → scan → match → fill → log" sequence and the unsupported-ATS short-circuit are actually exercised, not just eyeballed.
+
+The honest gap, and the reason this phase's README section says "not yet live-tested": the `GreenhouseFormScanner`/`LeverFormScanner` selectors are built from documented platform structure, not verified against a real, current page, and I deliberately didn't try to "live-verify" this one solo the way I did the Claude API calls in Phases 6/7 — an unsupervised run here would mean an actual browser hitting an actual company's site, which is a different order of side effect than a Claude API call. The plan going in was explicit about this: build and test everything that can be tested without a browser, then walk through one real, low-stakes posting together before this ever touches a job I actually care about. That walkthrough is the next step, not a formality — it's genuinely where a selector mismatch specific to a real form's current DOM would get caught.
 
 ## What I learned — Phase 7
 

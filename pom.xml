@@ -42,6 +42,13 @@
       <version>2.34.0</version>
     </dependency>
 
+    <!-- Browser automation for the semi-automated apply flow (Phase 8) -->
+    <dependency>
+      <groupId>org.seleniumhq.selenium</groupId>
+      <artifactId>selenium-java</artifactId>
+      <version>4.27.0</version>
+    </dependency>
+
     <!-- GUI. Classifier (${javafx.platform}) is set per OS/arch by the profiles below, so this
          resolves correctly on Mac/Windows/Linux without editing the version by hand. -->
     <dependency>

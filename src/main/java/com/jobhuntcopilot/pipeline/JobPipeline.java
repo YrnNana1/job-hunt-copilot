@@ -1,5 +1,7 @@
 package com.jobhuntcopilot.pipeline;
 
+import com.jobhuntcopilot.apply.ApplyAttemptView;
+import com.jobhuntcopilot.apply.ApplyFlowService;
 import com.jobhuntcopilot.config.BlocklistConfig;
 import com.jobhuntcopilot.config.RolesConfig;
 import com.jobhuntcopilot.coverletter.CoverLetterGenerationService;
@@ -18,6 +20,7 @@ import com.jobhuntcopilot.score.ScoringEngine;
 import com.jobhuntcopilot.tailor.ResumeTailoringService;
 import com.jobhuntcopilot.tailor.TailoredResumeView;
 
+import java.nio.file.Path;
 import java.sql.SQLException;
 import java.time.Duration;
 import java.time.Instant;
@@ -43,6 +46,7 @@ public class JobPipeline {
     private final EligibilityFilter eligibilityFilter;
     private final ResumeTailoringService resumeTailoringService;
     private final CoverLetterGenerationService coverLetterGenerationService;
+    private final ApplyFlowService applyFlowService;
 
     public JobPipeline(
             RolesConfig rolesConfig,
@@ -53,7 +57,8 @@ public class JobPipeline {
             EligibilityExclusionRepository eligibilityExclusionRepository,
             ScoringEngine scoringEngine,
             ResumeTailoringService resumeTailoringService,
-            CoverLetterGenerationService coverLetterGenerationService) {
+            CoverLetterGenerationService coverLetterGenerationService,
+            ApplyFlowService applyFlowService) {
         this.rolesConfig = rolesConfig;
         this.blocklistConfig = blocklistConfig;
         this.jobRepository = jobRepository;
@@ -64,6 +69,7 @@ public class JobPipeline {
         this.eligibilityFilter = new EligibilityFilter(rolesConfig.eligibility());
         this.resumeTailoringService = resumeTailoringService;
         this.coverLetterGenerationService = coverLetterGenerationService;
+        this.applyFlowService = applyFlowService;
     }
 
     /**
@@ -133,6 +139,21 @@ public class JobPipeline {
      */
     public CoverLetterView generateCoverLetter(Job job) throws SQLException {
         return coverLetterGenerationService.generate(job);
+    }
+
+    /**
+     * Launches a visible browser, navigates to the posting, and — for Greenhouse/Lever forms —
+     * fills in what it can confidently recognize, leaving the browser open for the user to review
+     * and submit themselves. Only called when the detail view's Apply button is clicked, and only
+     * once a tailored resume and cover letter already exist for this posting.
+     */
+    public ApplyAttemptView startApply(Job job, Path resumePdfPath, Path coverLetterPdfPath) throws SQLException {
+        return applyFlowService.start(job, resumePdfPath, coverLetterPdfPath);
+    }
+
+    /** Records what actually happened in the browser — the app can't observe a real submission on an external site. */
+    public void recordApplyOutcome(long attemptId, Job job, boolean submitted) throws SQLException {
+        applyFlowService.recordOutcome(attemptId, job, submitted);
     }
 
     public int apiCallsInLast24Hours() throws SQLException {

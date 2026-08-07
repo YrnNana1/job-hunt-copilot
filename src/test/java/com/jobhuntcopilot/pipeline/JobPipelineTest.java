@@ -70,10 +70,11 @@ class JobPipelineTest {
                 rolesConfig.recency(), rolesConfig.eligibility());
         ScoringEngine scoringEngine = new ScoringEngine(Set.of(), rolesConfig);
 
-        // Resume tailoring (Phase 6) and cover letters (Phase 7) aren't exercised by these tests —
-        // see ResumeTailoringServiceTest and CoverLetterGenerationServiceTest.
+        // Resume tailoring (Phase 6), cover letters (Phase 7), and the apply flow (Phase 8) aren't
+        // exercised by these tests — see ResumeTailoringServiceTest, CoverLetterGenerationServiceTest,
+        // and ApplyFlowServiceTest.
         return new JobPipeline(rolesConfig, blocklist, jobRepository, fetchService, apiCallRepository,
-                eligibilityExclusionRepository, scoringEngine, null, null);
+                eligibilityExclusionRepository, scoringEngine, null, null, null);
     }
 
     @Test
